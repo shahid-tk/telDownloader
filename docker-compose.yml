@@ -1,0 +1,42 @@
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegram_media_ingestion_bot
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      BOT_TOKEN: ${BOT_TOKEN}
+      ADMIN_USER_ID: ${ADMIN_USER_ID}
+      API_ID: ${API_ID}
+      API_HASH: ${API_HASH}
+      SESSION_FILE: /app/data/telethon.session
+      MONGO_URI: mongodb://mongodb:27017/media_ingestion
+      MOVIES_DIR: ${MOVIES_DIR:-/media/jellyfinData/movies}
+      SHOWS_DIR: ${SHOWS_DIR:-/media/jellyfinData/shows}
+      TELETHON_SOURCE_CHAT: ${TELETHON_SOURCE_CHAT:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ${MOVIES_DIR:-/media/jellyfinData/movies}:${MOVIES_DIR:-/media/jellyfinData/movies}
+      - ${SHOWS_DIR:-/media/jellyfinData/shows}:${SHOWS_DIR:-/media/jellyfinData/shows}
+      - ./data:/app/data
+      - ./logs:/app/logs
+
+  mongodb:
+    image: mongo:7
+    container_name: telegram_media_mongodb
+    restart: unless-stopped
+    command: ["--bind_ip_all"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 })"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - mongo_data:/data/db
+
+volumes:
+  mongo_data:
