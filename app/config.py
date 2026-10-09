@@ -13,8 +13,14 @@ class Settings(BaseSettings):
 
     mongo_uri: str = "mongodb://mongodb:27017/media_ingestion"
 
-    movies_dir: str = "/mnt/movies_share"
-    shows_dir: str = "/mnt/shows_share"
+    movies_dir: str = "/media/jellyfinData/movies"
+    shows_dir: str = "/media/jellyfinData/shows"
+
+    # Optional Media Servers
+    jellyfin_url: str = ""
+    jellyfin_api_key: str = ""
+    plex_url: str = ""
+    plex_token: str = ""
 
     log_file: str = "/app/logs/app.log"
     log_level: str = "INFO"

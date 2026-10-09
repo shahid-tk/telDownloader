@@ -20,6 +20,7 @@ from services.session_service import SessionService
 from services.telethon_service import TelethonService
 from services.download_service import DownloadService
 from services.media_service import MediaService
+from services.media_server import MediaServerService
 
 from handlers.start import start_command
 from handlers.movie import ask_movie_name
@@ -121,7 +122,15 @@ async def post_init(app: Application):
     telethon_service = TelethonService(settings.api_id, settings.api_hash, settings.session_file)
     await telethon_service.start()
     download_service = DownloadService(telethon_service, settings.telethon_source_chat)
-    media_service = MediaService(settings, session_service, uploads_repo, download_service)
+    media_server_service = MediaServerService(
+        jellyfin_url=settings.jellyfin_url,
+        jellyfin_api_key=settings.jellyfin_api_key,
+        plex_url=settings.plex_url,
+        plex_token=settings.plex_token,
+    )
+    media_service = MediaService(
+        settings, session_service, uploads_repo, download_service, media_server_service
+    )
 
     await users_repo.ensure_admin(settings.admin_user_id)
 
@@ -169,7 +178,7 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(menu_callbacks, pattern="^(mode_movie|mode_show)$"))
     app.add_handler(CallbackQueryHandler(unfinished_callbacks, pattern="^(resume|discard)$"))
     app.add_handler(CallbackQueryHandler(overwrite_callbacks, pattern="^(overwrite_yes|overwrite_no)$"))
-    
+
     async def meta_callbacks(update, context):
         from utils.auth import guard_admin
         if not await guard_admin(update, context):

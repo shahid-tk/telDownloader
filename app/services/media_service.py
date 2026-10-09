@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import time
@@ -20,11 +21,12 @@ logger = logging.getLogger(__name__)
 
 
 class MediaService:
-    def __init__(self, settings, session_service, uploads_repo, download_service):
+    def __init__(self, settings, session_service, uploads_repo, download_service, media_server_service=None):
         self.settings = settings
         self.session_service = session_service
         self.uploads_repo = uploads_repo
         self.download_service = download_service
+        self.media_server_service = media_server_service
 
         ensure_dir(os.path.join(settings.movies_dir, ".tmp"))
         ensure_dir(os.path.join(settings.shows_dir, ".tmp"))
@@ -320,3 +322,7 @@ class MediaService:
                 f"Next expected: e{(max_ep + 1):02d}"
             )
             logger.info("Episode saved: %s", final_path)
+
+        # Trigger media server scan in background if configured (silent & non-blocking)
+        if self.media_server_service:
+            asyncio.create_task(self.media_server_service.trigger_scan())
