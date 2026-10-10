@@ -1,3 +1,4 @@
+import asyncio
 import os
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -13,7 +14,9 @@ async def delete_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
     data = q.data
-    uploads_repo = context.application.bot_data["media_service"].uploads_repo
+    media_service = context.application.bot_data["media_service"]
+    uploads_repo = media_service.uploads_repo
+    media_server_service = getattr(media_service, "media_server_service", None)
 
     if data == "del_movies_list":
         movies = await uploads_repo.get_movies()
@@ -42,6 +45,9 @@ async def delete_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await uploads_repo.delete_movie(movie_name)
         await q.edit_message_text(f"✅ Deleted movie: {movie_name}")
+
+        if media_server_service:
+            asyncio.create_task(media_server_service.trigger_scan())
 
     elif data == "del_shows_list":
         shows = await uploads_repo.get_shows()
@@ -86,6 +92,9 @@ async def delete_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await uploads_repo.delete_show(show_name)
         await q.edit_message_text(f"✅ Deleted show: {show_name}")
 
+        if media_server_service:
+            asyncio.create_task(media_server_service.trigger_scan())
+
     elif data.startswith("del_show_episodes|"):
         _, show_name, season_str = data.split("|", 2)
         season = int(season_str)
@@ -118,6 +127,9 @@ async def delete_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await uploads_repo.delete_season(show_name, season)
         await q.edit_message_text(f"✅ Deleted Season {season} of {show_name}")
 
+        if media_server_service:
+            asyncio.create_task(media_server_service.trigger_scan())
+
     elif data.startswith("del_episode_confirm|"):
         _, show_name, season_str, episode_str = data.split("|", 3)
         kb = InlineKeyboardMarkup([
@@ -137,6 +149,9 @@ async def delete_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
         await uploads_repo.delete_episode(show_name, season, episode)
         await q.edit_message_text(f"✅ Deleted S{season:02d}E{episode:02d} of {show_name}")
+
+        if media_server_service:
+            asyncio.create_task(media_server_service.trigger_scan())
 
     elif data == "del_cancel":
         await q.edit_message_text("Deletion cancelled.")
