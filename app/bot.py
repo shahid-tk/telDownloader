@@ -121,7 +121,12 @@ async def post_init(app: Application):
     session_service = SessionService(sessions_repo)
     telethon_service = TelethonService(settings.api_id, settings.api_hash, settings.session_file)
     await telethon_service.start()
-    download_service = DownloadService(telethon_service, settings.telethon_source_chat)
+
+    bot_id = int(settings.bot_token.split(":")[0])
+    download_service = DownloadService(
+        telethon_service, settings.telethon_source_chat, bot_id=bot_id
+    )
+
     media_server_service = MediaServerService(
         jellyfin_url=settings.jellyfin_url,
         jellyfin_api_key=settings.jellyfin_api_key,

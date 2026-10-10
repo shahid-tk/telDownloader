@@ -10,22 +10,52 @@ logger = logging.getLogger(__name__)
 
 
 class DownloadService:
-    def __init__(self, telethon_service, source_chat: Optional[str] = None):
+    def __init__(
+        self,
+        telethon_service,
+        source_chat: Optional[str] = None,
+        bot_id: Optional[int] = None,
+    ):
         self.telethon_service = telethon_service
         self.source_chat = source_chat
+        self.bot_id = bot_id
 
     async def _resolve_entity(self, client, fallback_chat_id: Optional[int]):
+        """
+        Resolves the Telegram entity from Telethon's perspective.
+        - If source_chat is set in config, prioritize that.
+        - When a user chats privately with the bot, fallback_chat_id is the user's ID.
+          Since Telethon is logged in as that same user, asking for user_id would resolve
+          to 'Saved Messages' (chat with oneself). We must resolve the BOT entity instead!
+        - For group chats (negative IDs), resolve the group chat ID directly.
+        """
         if self.source_chat:
             try:
                 return await client.get_entity(self.source_chat)
             except Exception:
                 logger.exception("Failed resolving source_chat=%s", self.source_chat)
 
+        me = await client.get_me()
+
         if fallback_chat_id is not None:
+            # Check if this is a private chat between the user and the bot
+            if me and int(fallback_chat_id) == me.id:
+                if self.bot_id:
+                    try:
+                        return await client.get_entity(int(self.bot_id))
+                    except Exception:
+                        logger.exception("Failed resolving bot_id=%s", self.bot_id)
+            else:
+                try:
+                    return await client.get_entity(int(fallback_chat_id))
+                except Exception:
+                    logger.exception("Failed resolving fallback_chat_id=%s", fallback_chat_id)
+
+        if self.bot_id:
             try:
-                return await client.get_entity(int(fallback_chat_id))
+                return await client.get_entity(int(self.bot_id))
             except Exception:
-                logger.exception("Failed resolving fallback_chat_id=%s", fallback_chat_id)
+                pass
 
         try:
             return await client.get_entity("me")
@@ -54,35 +84,55 @@ class DownloadService:
             raise RuntimeError("Unable to resolve any Telethon source entity")
 
         source_msg = None
-        
-        # 1. Try to fetch the exact message by ID if we are in the same chat
-        if message_id and not self.source_chat:
-            try:
-                m = await client.get_messages(entity, ids=message_id)
-                if m and m.media:
-                    source_msg = m
-            except Exception:
-                logger.warning("Failed to fetch message by ID %s", message_id)
+        clean_exp_name = expected_file_name.strip().lower() if expected_file_name else None
 
-        # 2. Fallback to searching the chat history
-        if not source_msg:
-            async for m in client.iter_messages(entity, limit=100):
+        # Search recent messages in the resolved chat (limit 50)
+        # Pass 1: Strict match (both filename and file size match)
+        if clean_exp_name and expected_file_size:
+            async for m in client.iter_messages(entity, limit=50):
                 if not m or not m.media:
                     continue
+                m_name = getattr(getattr(m, "file", None), "name", None)
+                m_size = getattr(getattr(m, "file", None), "size", None)
+                if (
+                    m_name
+                    and m_name.strip().lower() == clean_exp_name
+                    and m_size == expected_file_size
+                ):
+                    source_msg = m
+                    logger.info("Found exact match by name and size: msg_id=%s file=%s", m.id, m_name)
+                    break
 
+        # Pass 2: Match by filename or size
+        if not source_msg:
+            async for m in client.iter_messages(entity, limit=50):
+                if not m or not m.media:
+                    continue
                 m_name = getattr(getattr(m, "file", None), "name", None)
                 m_size = getattr(getattr(m, "file", None), "size", None)
 
-                if expected_file_name and m_name and m_name.lower() == expected_file_name.lower():
+                if clean_exp_name and m_name and m_name.strip().lower() == clean_exp_name:
                     source_msg = m
+                    logger.info("Found match by filename: msg_id=%s file=%s", m.id, m_name)
                     break
-                    
+
                 if expected_file_size and m_size == expected_file_size:
                     source_msg = m
+                    logger.info("Found match by file size: msg_id=%s size=%s", m.id, m_size)
+                    break
+
+        # Pass 3: Fallback for media sent without filename (e.g. video streams)
+        if not source_msg and not self.source_chat:
+            async for m in client.iter_messages(entity, limit=5):
+                if m and m.media:
+                    source_msg = m
+                    logger.info("Found latest media fallback: msg_id=%s", m.id)
                     break
 
         if source_msg is None:
-            raise RuntimeError(f"No matching media message found in resolved Telethon chat. (Name: {expected_file_name}, Size: {expected_file_size})")
+            raise RuntimeError(
+                f"No matching media message found in chat. (Name: {expected_file_name}, Size: {expected_file_size})"
+            )
 
         last_edit_ts = 0.0
         last_percent = -1
