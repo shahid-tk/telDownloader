@@ -5,8 +5,31 @@ import time
 from typing import Optional
 
 from telegram.error import BadRequest
+from services.download_tracker import tracker
 
 logger = logging.getLogger(__name__)
+
+
+def _format_size(size_bytes: float) -> str:
+    if size_bytes <= 0:
+        return "0 B"
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if size_bytes < 1024.0:
+            return f"{size_bytes:.1f} {unit}"
+        size_bytes /= 1024.0
+    return f"{size_bytes:.1f} PB"
+
+
+def _format_time(seconds: float) -> str:
+    if seconds <= 0:
+        return "--"
+    mins, secs = divmod(int(seconds), 60)
+    hours, mins = divmod(mins, 60)
+    if hours > 0:
+        return f"{hours}h {mins:02d}m"
+    if mins > 0:
+        return f"{mins}m {secs:02d}s"
+    return f"{secs}s"
 
 
 class DownloadService:
@@ -21,14 +44,6 @@ class DownloadService:
         self.bot_id = bot_id
 
     async def _resolve_entity(self, client, fallback_chat_id: Optional[int]):
-        """
-        Resolves the Telegram entity from Telethon's perspective.
-        - If source_chat is set in config, prioritize that.
-        - When a user chats privately with the bot, fallback_chat_id is the user's ID.
-          Since Telethon is logged in as that same user, asking for user_id would resolve
-          to 'Saved Messages' (chat with oneself). We must resolve the BOT entity instead!
-        - For group chats (negative IDs), resolve the group chat ID directly.
-        """
         if self.source_chat:
             try:
                 return await client.get_entity(self.source_chat)
@@ -38,7 +53,6 @@ class DownloadService:
         me = await client.get_me()
 
         if fallback_chat_id is not None:
-            # Check if this is a private chat between the user and the bot
             if me and int(fallback_chat_id) == me.id:
                 if self.bot_id:
                     try:
@@ -72,6 +86,8 @@ class DownloadService:
         fallback_chat_id: Optional[int] = None,
         message_id: Optional[int] = None,
         expected_file_size: Optional[int] = None,
+        task_id: Optional[str] = None,
+        media_type: str = "media",
     ) -> None:
         os.makedirs(os.path.dirname(destination_path), exist_ok=True)
 
@@ -86,8 +102,6 @@ class DownloadService:
         source_msg = None
         clean_exp_name = expected_file_name.strip().lower() if expected_file_name else None
 
-        # Search recent messages in the resolved chat (limit 50)
-        # Pass 1: Strict match (both filename and file size match)
         if clean_exp_name and expected_file_size:
             async for m in client.iter_messages(entity, limit=50):
                 if not m or not m.media:
@@ -103,7 +117,6 @@ class DownloadService:
                     logger.info("Found exact match by name and size: msg_id=%s file=%s", m.id, m_name)
                     break
 
-        # Pass 2: Match by filename or size
         if not source_msg:
             async for m in client.iter_messages(entity, limit=50):
                 if not m or not m.media:
@@ -121,7 +134,6 @@ class DownloadService:
                     logger.info("Found match by file size: msg_id=%s size=%s", m.id, m_size)
                     break
 
-        # Pass 3: Fallback for media sent without filename (e.g. video streams)
         if not source_msg and not self.source_chat:
             async for m in client.iter_messages(entity, limit=5):
                 if m and m.media:
@@ -134,8 +146,16 @@ class DownloadService:
                 f"No matching media message found in chat. (Name: {expected_file_name}, Size: {expected_file_size})"
             )
 
+        # Register in Web UI DownloadTracker
+        t_id = task_id or f"{fallback_chat_id}_{message_id}_{int(time.time())}"
+        display_name = expected_file_name or os.path.basename(destination_path)
+        total_size = expected_file_size or getattr(getattr(source_msg, "file", None), "size", 0) or 0
+        tracker.start_download(t_id, display_name, media_type, total_size)
+
         last_edit_ts = 0.0
         last_percent = -1
+        last_bytes = 0
+        start_ts = time.time()
         last_text = None
 
         async def safe_edit(text: str):
@@ -156,28 +176,51 @@ class DownloadService:
         logger.info("Telethon download started: msg_id=%s dest=%s", source_msg.id, destination_path)
 
         def progress_callback(current: int, total: int):
-            nonlocal last_edit_ts, last_percent
+            nonlocal last_edit_ts, last_percent, last_bytes
             if total <= 0:
                 return
 
             percent = int((current / total) * 100)
             now = time.monotonic()
+            elapsed_total = now - start_ts
 
+            # Calculate speed and ETA
+            speed_bps = current / elapsed_total if elapsed_total > 0 else 0
+            speed_str = f"{_format_size(speed_bps)}/s"
+            remaining_bytes = max(0, total - current)
+            eta_seconds = remaining_bytes / speed_bps if speed_bps > 0 else 0
+            eta_str = _format_time(eta_seconds)
+
+            # Update Web UI Tracker
+            tracker.update_progress(t_id, current, total, percent, speed_str, eta_str)
+
+            # Throttle Telegram message updates to every 4s
             if percent == last_percent:
                 return
-            if (now - last_edit_ts) < 5 and percent < 100:
+            if (now - last_edit_ts) < 4 and percent < 100:
                 return
 
             last_percent = percent
             last_edit_ts = now
-            logger.info("Download progress: %s/%s (%s%%)", current, total, percent)
-            asyncio.create_task(safe_edit(f"Downloading...\n{percent}%"))
+            logger.info("Download progress: %s/%s (%s%%) @ %s, ETA: %s", current, total, percent, speed_str, eta_str)
+            asyncio.create_task(
+                safe_edit(
+                    f"Downloading...\n"
+                    f"Progress: {percent}%\n"
+                    f"Speed: {speed_str}\n"
+                    f"ETA: {eta_str}"
+                )
+            )
 
-        await client.download_media(
-            source_msg,
-            file=destination_path,
-            progress_callback=progress_callback,
-        )
-
-        await safe_edit("Downloading...\n100%")
-        logger.info("Telethon download completed: %s", destination_path)
+        try:
+            await client.download_media(
+                source_msg,
+                file=destination_path,
+                progress_callback=progress_callback,
+            )
+            tracker.set_status(t_id, "processing")
+            await safe_edit("Processing & saving media...")
+            logger.info("Telethon download completed: %s", destination_path)
+        except Exception as e:
+            tracker.set_status(t_id, "failed", str(e))
+            raise

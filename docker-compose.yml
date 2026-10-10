@@ -5,11 +5,9 @@ services:
       dockerfile: Dockerfile
     container_name: telegram_media_ingestion_bot
     restart: unless-stopped
-    depends_on:
-      mongodb:
-        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-8088}:8088"
     networks:
-      - default
       - hit_net
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
@@ -17,7 +15,7 @@ services:
       API_ID: ${API_ID}
       API_HASH: ${API_HASH}
       SESSION_FILE: /app/data/telethon.session
-      MONGO_URI: mongodb://mongodb:27017/media_ingestion
+      SQLITE_PATH: /app/data/media_data.db
       MOVIES_DIR: ${MOVIES_DIR:-/media/jellyfinData/movies}
       SHOWS_DIR: ${SHOWS_DIR:-/media/jellyfinData/shows}
       TELETHON_SOURCE_CHAT: ${TELETHON_SOURCE_CHAT:-}
@@ -25,32 +23,15 @@ services:
       JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:-}
       PLEX_URL: ${PLEX_URL:-}
       PLEX_TOKEN: ${PLEX_TOKEN:-}
+      WEB_PORT: 8088
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
       - ${MOVIES_DIR:-/media/jellyfinData/movies}:${MOVIES_DIR:-/media/jellyfinData/movies}
       - ${SHOWS_DIR:-/media/jellyfinData/shows}:${SHOWS_DIR:-/media/jellyfinData/shows}
       - ./data:/app/data
       - ./logs:/app/logs
-
-  mongodb:
-    image: mongo:7
-    container_name: telegram_media_mongodb
-    restart: unless-stopped
-    command: ["--bind_ip_all"]
-    networks:
-      - default
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.runCommand({ ping: 1 })"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    volumes:
-      - mongo_data:/data/db
+      - ./.env:/app/.env
 
 networks:
-  default:
   hit_net:
     external: true
-
-volumes:
-  mongo_data:

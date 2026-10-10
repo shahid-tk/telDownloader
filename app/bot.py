@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import uvicorn
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -11,7 +13,7 @@ from config import settings
 from utils.logger import setup_logger
 from utils.helpers import ensure_dir
 
-from database.mongo import Mongo
+from database.sqlite import Database
 from database.repositories.users_repo import UsersRepository
 from database.repositories.sessions_repo import SessionsRepository
 from database.repositories.uploads_repo import UploadsRepository
@@ -33,6 +35,8 @@ from handlers.callbacks import (
     overwrite_callbacks,
     show_callbacks,
 )
+
+from web.server import app as web_app
 
 logger = logging.getLogger(__name__)
 
@@ -116,12 +120,12 @@ async def post_init(app: Application):
     ensure_dir(settings.movies_dir)
     ensure_dir(settings.shows_dir)
 
-    mongo = Mongo(settings.mongo_uri)
-    await mongo.ensure_indexes()
+    db = Database(settings.sqlite_path)
+    await db.connect()
 
-    users_repo = UsersRepository(mongo.db)
-    sessions_repo = SessionsRepository(mongo.db)
-    uploads_repo = UploadsRepository(mongo.db)
+    users_repo = UsersRepository(db.conn)
+    sessions_repo = SessionsRepository(db.conn)
+    uploads_repo = UploadsRepository(db.conn)
 
     session_service = SessionService(sessions_repo)
     telethon_service = TelethonService(settings.api_id, settings.api_hash, settings.session_file)
@@ -145,7 +149,7 @@ async def post_init(app: Application):
     await users_repo.ensure_admin(settings.admin_user_id)
 
     app.bot_data["settings"] = settings
-    app.bot_data["mongo"] = mongo
+    app.bot_data["db"] = db
     app.bot_data["session_service"] = session_service
     app.bot_data["media_service"] = media_service
 
@@ -161,9 +165,9 @@ async def post_shutdown(app: Application):
         if telethon_service:
             await telethon_service.stop()
 
-    mongo = app.bot_data.get("mongo")
-    if mongo:
-        await mongo.close()
+    db = app.bot_data.get("db")
+    if db:
+        await db.close()
 
 
 def build_application() -> Application:
@@ -207,7 +211,38 @@ def build_application() -> Application:
     return app
 
 
-if __name__ == "__main__":
+async def run_all():
     setup_logger(settings.log_file, settings.log_level)
-    application = build_application()
-    application.run_polling(allowed_updates=["message", "callback_query"])
+    bot_app = build_application()
+
+    # Configure Uvicorn web server
+    config = uvicorn.Config(
+        web_app,
+        host=settings.web_host,
+        port=settings.web_port,
+        log_level=settings.log_level.lower(),
+        access_log=False,
+    )
+    server = uvicorn.Server(config)
+
+    # Initialize and start bot application
+    await bot_app.initialize()
+    await bot_app.start()
+    await bot_app.updater.start_polling(allowed_updates=["message", "callback_query"])
+
+    logger.info("Web dashboard running on http://%s:%s", settings.web_host, settings.web_port)
+
+    # Run web server concurrently with bot polling
+    try:
+        await server.serve()
+    finally:
+        await bot_app.updater.stop()
+        await bot_app.stop()
+        await bot_app.shutdown()
+
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(run_all())
+    except (KeyboardInterrupt, SystemExit):
+        pass

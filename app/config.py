@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 
     telethon_source_chat: str = ""
 
-    mongo_uri: str = "mongodb://mongodb:27017/media_ingestion"
+    sqlite_path: str = "/app/data/media_data.db"
 
     movies_dir: str = "/media/jellyfinData/movies"
     shows_dir: str = "/media/jellyfinData/shows"
@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     jellyfin_api_key: str = ""
     plex_url: str = ""
     plex_token: str = ""
+
+    # Web Dashboard
+    web_host: str = "0.0.0.0"
+    web_port: int = 8088
 
     log_file: str = "/app/logs/app.log"
     log_level: str = "INFO"

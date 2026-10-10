@@ -16,6 +16,7 @@ from utils.helpers import (
     parse_show_info,
 )
 from utils.ffprobe import extract_metadata, get_format_name, get_show_details
+from services.download_tracker import tracker
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +101,7 @@ class MediaService:
         progress_msg = await msg.reply_text("Downloading...")
         logger.info("Download started to temp: %s", tmp_path)
 
+        task_id = f"{chat_id}_{msg.message_id}_{int(time.time())}"
         try:
             await self.download_service.download_from_telethon_chat(
                 progress_message=progress_msg,
@@ -108,9 +110,12 @@ class MediaService:
                 fallback_chat_id=chat_id,
                 message_id=msg.message_id,
                 expected_file_size=file_size,
+                task_id=task_id,
+                media_type=session.get("mode", "media"),
             )
         except Exception:
             logger.exception("Download failed")
+            tracker.set_status(task_id, "failed", "Download failed")
             await progress_msg.edit_text("❌ Download failed.")
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
@@ -322,7 +327,10 @@ class MediaService:
                 f"Next expected: e{(max_ep + 1):02d}\n\n"
                 f"Send next episode or use /stop when finished."
             )
-            logger.info("Episode saved: %s", final_path)
+        # Mark tracker status completed for any task tracking this file
+        for t_id, task in list(tracker.active_tasks.items()):
+            if task.name == filename or final_path.endswith(task.name):
+                tracker.set_status(t_id, "completed")
 
         # Trigger media server scan in background if configured (silent & non-blocking)
         if self.media_server_service:

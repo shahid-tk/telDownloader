@@ -1,0 +1,601 @@
+import os
+import re
+from typing import Dict, Any
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+from config import settings
+from services.download_tracker import tracker
+
+app = FastAPI(title="telDownloader Web Dashboard", docs_url="/api/docs")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+HTML_CONTENT = """<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>telDownloader Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: { 500: '#3b82f6', 600: '#2563eb' }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    @keyframes pulse-subtle { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+    .animate-pulse-subtle { animation: pulse-subtle 2s infinite ease-in-out; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans selection:bg-blue-600 selection:text-white">
+
+  <!-- Top Navbar -->
+  <header class="bg-slate-900 border-b border-slate-800 sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-xl shadow-lg shadow-blue-500/20">
+          📥
+        </div>
+        <div>
+          <h1 class="text-lg font-bold text-white tracking-wide">telDownloader</h1>
+          <p class="text-xs text-slate-400">Media Ingestion & Live Monitor</p>
+        </div>
+      </div>
+      <div class="flex items-center space-x-3">
+        <span id="ws-badge" class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+          <span class="w-1.5 h-1.5 mr-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+          Live Stream
+        </span>
+        <button onclick="toggleTab('downloads')" id="tab-btn-downloads" class="px-3.5 py-1.5 rounded-lg text-sm font-medium bg-blue-600 text-white shadow-sm transition">Monitor</button>
+        <button onclick="toggleTab('library')" id="tab-btn-library" class="px-3.5 py-1.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800 transition">Library</button>
+        <button onclick="toggleTab('config')" id="tab-btn-config" class="px-3.5 py-1.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800 transition">Configuration</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full space-y-8">
+
+    <!-- Stat Cards -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Downloads</div>
+        <div class="mt-2 text-3xl font-extrabold text-white flex items-baseline justify-between">
+          <span id="stat-active">0</span>
+          <span class="text-blue-500 text-sm">⚡ Live</span>
+        </div>
+      </div>
+      <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Movies</div>
+        <div class="mt-2 text-3xl font-extrabold text-white flex items-baseline justify-between">
+          <span id="stat-movies">--</span>
+          <span class="text-slate-500 text-sm">🎬</span>
+        </div>
+      </div>
+      <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Shows</div>
+        <div class="mt-2 text-3xl font-extrabold text-white flex items-baseline justify-between">
+          <span id="stat-shows">--</span>
+          <span class="text-slate-500 text-sm">📺</span>
+        </div>
+      </div>
+      <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 shadow-sm">
+        <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Media Servers</div>
+        <div class="mt-2 text-sm font-semibold text-slate-200" id="stat-servers">
+          Loading...
+        </div>
+      </div>
+    </div>
+
+    <!-- TAB 1: DOWNLOADS MONITOR -->
+    <section id="section-downloads" class="space-y-6">
+      <!-- Active Section -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm">
+        <div class="flex items-center justify-between pb-4 border-b border-slate-800">
+          <h2 class="text-lg font-bold text-white flex items-center space-x-2">
+            <span>Active Ingestion Queue</span>
+            <span id="active-count-badge" class="ml-2 px-2 py-0.5 text-xs rounded-full bg-blue-500/20 text-blue-400 font-medium">0 active</span>
+          </h2>
+        </div>
+
+        <div id="active-list" class="mt-6 space-y-4">
+          <div class="py-12 text-center text-slate-500">
+            <svg class="mx-auto h-12 w-12 text-slate-600 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+            </svg>
+            <p class="text-sm font-medium">No active downloads right now.</p>
+            <p class="text-xs text-slate-500 mt-1">Send a video or episode to your Telegram bot to start downloading.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent History Section -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm">
+        <h2 class="text-lg font-bold text-white pb-4 border-b border-slate-800">Recent Completed & Processed</h2>
+        <div class="mt-4 overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-800 text-left text-sm text-slate-300">
+            <thead>
+              <tr class="text-xs uppercase text-slate-500">
+                <th class="py-3 px-4 font-semibold">Media Name</th>
+                <th class="py-3 px-4 font-semibold">Type</th>
+                <th class="py-3 px-4 font-semibold">Status</th>
+                <th class="py-3 px-4 font-semibold">Completed Time</th>
+              </tr>
+            </thead>
+            <tbody id="history-tbody" class="divide-y divide-slate-800/60">
+              <tr>
+                <td colspan="4" class="py-6 text-center text-slate-500">No recent history yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: LIBRARY EXPLORER -->
+    <section id="section-library" class="hidden space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-800 gap-3">
+          <h2 class="text-lg font-bold text-white">Ingested Media Library</h2>
+          <input type="text" id="lib-search" oninput="filterLibrary()" placeholder="Search movies, shows..." class="bg-slate-950 border border-slate-700 px-3 py-1.5 rounded-lg text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 w-full sm:w-64">
+        </div>
+        <div class="mt-4 overflow-x-auto">
+          <table class="min-w-full divide-y divide-slate-800 text-left text-sm text-slate-300">
+            <thead>
+              <tr class="text-xs uppercase text-slate-500">
+                <th class="py-3 px-4 font-semibold">Title</th>
+                <th class="py-3 px-4 font-semibold">Type</th>
+                <th class="py-3 px-4 font-semibold">Season / Episode</th>
+                <th class="py-3 px-4 font-semibold">File Name</th>
+                <th class="py-3 px-4 font-semibold">Ingested Date</th>
+              </tr>
+            </thead>
+            <tbody id="library-tbody" class="divide-y divide-slate-800/60">
+              <tr>
+                <td colspan="5" class="py-8 text-center text-slate-500">Loading library...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: CONFIGURATION EDITOR -->
+    <section id="section-config" class="hidden space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-sm">
+        <div class="flex items-center justify-between pb-4 border-b border-slate-800">
+          <div>
+            <h2 class="text-lg font-bold text-white">Environment & Parameters</h2>
+            <p class="text-xs text-slate-400 mt-1">Configure your bot, media servers, and directories safely from this web interface.</p>
+          </div>
+          <button onclick="saveConfig()" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold shadow-md transition">Save & Restart App</button>
+        </div>
+
+        <form id="config-form" class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div class="space-y-4">
+            <h3 class="text-sm font-semibold text-blue-400 uppercase tracking-wider">Telegram Credentials</h3>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Telegram Bot Token</label>
+              <input type="text" id="cfg-BOT_TOKEN" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Admin Telegram User ID</label>
+              <input type="text" id="cfg-ADMIN_USER_ID" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">Telethon API ID</label>
+                <input type="text" id="cfg-API_ID" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">Telethon API Hash</label>
+                <input type="text" id="cfg-API_HASH" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Telethon Source Chat (Optional)</label>
+              <input type="text" id="cfg-TELETHON_SOURCE_CHAT" placeholder="Leave empty for private bot chat" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+            </div>
+          </div>
+
+          <div class="space-y-4">
+            <h3 class="text-sm font-semibold text-blue-400 uppercase tracking-wider">Media & Auto-Scan Config</h3>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Movies Directory</label>
+              <input type="text" id="cfg-MOVIES_DIR" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Shows Directory</label>
+              <input type="text" id="cfg-SHOWS_DIR" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">Jellyfin URL</label>
+                <input type="text" id="cfg-JELLYFIN_URL" placeholder="http://jellyfin:8096" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">Jellyfin API Key</label>
+                <input type="text" id="cfg-JELLYFIN_API_KEY" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+              </div>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">Plex URL</label>
+                <input type="text" id="cfg-PLEX_URL" placeholder="http://plex:32400" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+              </div>
+              <div>
+                <label class="block text-xs font-medium text-slate-400 mb-1">Plex Token</label>
+                <input type="text" id="cfg-PLEX_TOKEN" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+              </div>
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-slate-400 mb-1">Log Level</label>
+              <select id="cfg-LOG_LEVEL" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+                <option value="INFO">INFO</option>
+                <option value="DEBUG">DEBUG</option>
+                <option value="WARNING">WARNING</option>
+                <option value="ERROR">ERROR</option>
+              </select>
+            </div>
+          </div>
+        </form>
+
+        <div id="cfg-alert" class="hidden mt-4 p-3 rounded-lg text-sm"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    let libraryData = [];
+
+    function toggleTab(tab) {
+      ['downloads', 'library', 'config'].forEach(t => {
+        const sec = document.getElementById('section-' + t);
+        const btn = document.getElementById('tab-btn-' + t);
+        if (t === tab) {
+          sec.classList.remove('hidden');
+          btn.className = "px-3.5 py-1.5 rounded-lg text-sm font-medium bg-blue-600 text-white shadow-sm transition";
+        } else {
+          sec.classList.add('hidden');
+          btn.className = "px-3.5 py-1.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800 transition";
+        }
+      });
+      if (tab === 'library') loadLibrary();
+      if (tab === 'config') loadConfig();
+    }
+
+    // Connect WebSocket
+    function connectWS() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${protocol}//${window.location.host}/ws/downloads`);
+
+      ws.onopen = () => {
+        document.getElementById('ws-badge').innerHTML = '<span class="w-1.5 h-1.5 mr-1.5 rounded-full bg-emerald-400 animate-pulse"></span>Live Stream';
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        renderDownloads(data);
+      };
+
+      ws.onclose = () => {
+        document.getElementById('ws-badge').innerHTML = '<span class="w-1.5 h-1.5 mr-1.5 rounded-full bg-rose-400"></span>Disconnected';
+        setTimeout(connectWS, 3000);
+      };
+    }
+
+    function renderDownloads(data) {
+      const active = data.active || [];
+      const history = data.history || [];
+
+      document.getElementById('stat-active').textContent = active.length;
+      document.getElementById('active-count-badge').textContent = `${active.length} active`;
+
+      const activeList = document.getElementById('active-list');
+      if (active.length === 0) {
+        activeList.innerHTML = `
+          <div class="py-12 text-center text-slate-500">
+            <svg class="mx-auto h-12 w-12 text-slate-600 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+            </svg>
+            <p class="text-sm font-medium">No active downloads right now.</p>
+            <p class="text-xs text-slate-500 mt-1">Send a video or episode to your Telegram bot to start downloading.</p>
+          </div>
+        `;
+      } else {
+        activeList.innerHTML = active.map(item => `
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 shadow-sm space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center space-x-3">
+                <span class="text-2xl">${item.media_type === 'movie' ? '🎬' : '📺'}</span>
+                <div>
+                  <h3 class="font-semibold text-white text-base">${item.name}</h3>
+                  <p class="text-xs text-slate-400 capitalize">${item.media_type} Mode &bull; Status: <span class="text-blue-400 font-medium">${item.status}</span></p>
+                </div>
+              </div>
+              <div class="text-right">
+                <span class="text-lg font-bold text-blue-400">${item.percent}%</span>
+                <p class="text-xs text-slate-400">${item.speed_str} &bull; ETA: ${item.eta_str}</p>
+              </div>
+            </div>
+            <div class="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden">
+              <div class="bg-gradient-to-r from-blue-600 to-indigo-500 h-2.5 rounded-full transition-all duration-300" style="width: ${item.percent}%"></div>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      // History Table
+      const historyTbody = document.getElementById('history-tbody');
+      if (history.length === 0) {
+        historyTbody.innerHTML = `<tr><td colspan="4" class="py-6 text-center text-slate-500">No recent history yet.</td></tr>`;
+      } else {
+        historyTbody.innerHTML = history.map(item => `
+          <tr class="hover:bg-slate-800/40 transition">
+            <td class="py-3 px-4 font-medium text-white">${item.name}</td>
+            <td class="py-3 px-4 uppercase text-xs font-semibold text-slate-400">${item.media_type}</td>
+            <td class="py-3 px-4">
+              <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${item.status === 'completed' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}">
+                ${item.status}
+              </span>
+            </td>
+            <td class="py-3 px-4 text-xs text-slate-400">${item.completed_at ? new Date(item.completed_at * 1000).toLocaleString() : '--'}</td>
+          </tr>
+        `).join('');
+      }
+    }
+
+    async function loadStats() {
+      try {
+        const res = await fetch('/api/stats');
+        const data = await res.json();
+        document.getElementById('stat-movies').textContent = data.movies_count;
+        document.getElementById('stat-shows').textContent = data.shows_count;
+        
+        let serverText = [];
+        if (data.jellyfin_configured) serverText.push('Jellyfin ✅');
+        if (data.plex_configured) serverText.push('Plex ✅');
+        document.getElementById('stat-servers').textContent = serverText.length > 0 ? serverText.join(' & ') : 'None Configured';
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function loadLibrary() {
+      try {
+        const res = await fetch('/api/library');
+        libraryData = await res.json();
+        filterLibrary();
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function filterLibrary() {
+      const q = (document.getElementById('lib-search').value || '').toLowerCase();
+      const filtered = libraryData.filter(item => {
+        const name = (item.movie_name || item.show_name || item.filename || '').toLowerCase();
+        return name.includes(q);
+      });
+
+      const tbody = document.getElementById('library-tbody');
+      if (filtered.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" class="py-6 text-center text-slate-500">No media found.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = filtered.map(item => `
+        <tr class="hover:bg-slate-800/40 transition">
+          <td class="py-3 px-4 font-semibold text-white">${item.type === 'movie' ? item.movie_name : item.show_name}</td>
+          <td class="py-3 px-4 uppercase text-xs text-slate-400">${item.type}</td>
+          <td class="py-3 px-4 text-xs text-slate-300">${item.type === 'show' ? `Season ${item.season} &bull; Ep ${item.episode}` : 'N/A'}</td>
+          <td class="py-3 px-4 text-xs font-mono text-slate-400">${item.filename}</td>
+          <td class="py-3 px-4 text-xs text-slate-400">${item.uploaded_at ? item.uploaded_at.substring(0, 19).replace('T', ' ') : '--'}</td>
+        </tr>
+      `).join('');
+    }
+
+    async function loadConfig() {
+      try {
+        const res = await fetch('/api/config');
+        const data = await res.json();
+        for (const [k, v] of Object.entries(data)) {
+          const input = document.getElementById('cfg-' + k);
+          if (input) input.value = v;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function saveConfig() {
+      const alertDiv = document.getElementById('cfg-alert');
+      alertDiv.className = "mt-4 p-3 rounded-lg text-sm bg-blue-500/20 text-blue-300 border border-blue-500/30";
+      alertDiv.textContent = "Saving configuration...";
+      alertDiv.classList.remove('hidden');
+
+      const payload = {
+        BOT_TOKEN: document.getElementById('cfg-BOT_TOKEN').value,
+        ADMIN_USER_ID: document.getElementById('cfg-ADMIN_USER_ID').value,
+        API_ID: document.getElementById('cfg-API_ID').value,
+        API_HASH: document.getElementById('cfg-API_HASH').value,
+        TELETHON_SOURCE_CHAT: document.getElementById('cfg-TELETHON_SOURCE_CHAT').value,
+        MOVIES_DIR: document.getElementById('cfg-MOVIES_DIR').value,
+        SHOWS_DIR: document.getElementById('cfg-SHOWS_DIR').value,
+        JELLYFIN_URL: document.getElementById('cfg-JELLYFIN_URL').value,
+        JELLYFIN_API_KEY: document.getElementById('cfg-JELLYFIN_API_KEY').value,
+        PLEX_URL: document.getElementById('cfg-PLEX_URL').value,
+        PLEX_TOKEN: document.getElementById('cfg-PLEX_TOKEN').value,
+        LOG_LEVEL: document.getElementById('cfg-LOG_LEVEL').value,
+      };
+
+      try {
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const result = await res.json();
+        if (res.ok) {
+          alertDiv.className = "mt-4 p-3 rounded-lg text-sm bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
+          alertDiv.textContent = "Configuration saved successfully!";
+        } else {
+          alertDiv.className = "mt-4 p-3 rounded-lg text-sm bg-rose-500/20 text-rose-300 border border-rose-500/30";
+          alertDiv.textContent = "Error saving config: " + (result.detail || "Unknown error");
+        }
+      } catch (e) {
+        alertDiv.className = "mt-4 p-3 rounded-lg text-sm bg-rose-500/20 text-rose-300 border border-rose-500/30";
+        alertDiv.textContent = "Failed connecting to server: " + e.message;
+      }
+    }
+
+    // Startup
+    connectWS();
+    loadStats();
+    setInterval(loadStats, 10000);
+  </script>
+</body>
+</html>
+"""
+
+
+@app.get("/", response_class=HTMLResponse)
+async def get_index():
+    return HTMLResponse(content=HTML_CONTENT)
+
+
+@app.get("/api/downloads")
+async def get_downloads():
+    return JSONResponse(tracker.get_all())
+
+
+@app.websocket("/ws/downloads")
+async def websocket_downloads(websocket: WebSocket):
+    await websocket.accept()
+    # Send immediate state
+    await websocket.send_json(tracker.get_all())
+    q = tracker.subscribe()
+    try:
+        while True:
+            # Wait for tracker update or send periodic keepalive
+            try:
+                data = await asyncio.wait_for(q.get(), timeout=2.0)
+                await websocket.send_json(data)
+            except asyncio.TimeoutError:
+                await websocket.send_json(tracker.get_all())
+    except (WebSocketDisconnect, Exception):
+        pass
+    finally:
+        tracker.unsubscribe(q)
+
+
+@app.get("/api/stats")
+async def get_stats():
+    from database.sqlite import Database
+    from database.repositories.uploads_repo import UploadsRepository
+
+    db = Database(settings.sqlite_path)
+    await db.connect()
+    repo = UploadsRepository(db.conn)
+    movies = await repo.get_movies()
+    shows = await repo.get_shows()
+    await db.close()
+
+    return {
+        "movies_count": len(movies),
+        "shows_count": len(shows),
+        "jellyfin_configured": bool(settings.jellyfin_url and settings.jellyfin_api_key),
+        "plex_configured": bool(settings.plex_url and settings.plex_token),
+    }
+
+
+@app.get("/api/library")
+async def get_library():
+    from database.sqlite import Database
+    from database.repositories.uploads_repo import UploadsRepository
+
+    db = Database(settings.sqlite_path)
+    await db.connect()
+    repo = UploadsRepository(db.conn)
+    items = await repo.get_recent_uploads(limit=200)
+    await db.close()
+    return JSONResponse(items)
+
+
+@app.get("/api/config")
+async def get_config():
+    # Read current .env
+    env_path = ".env"
+    cfg = {}
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    cfg[k.strip()] = v.strip().strip('"').strip("'")
+    return JSONResponse(cfg)
+
+
+class ConfigPayload(BaseModel):
+    BOT_TOKEN: str
+    ADMIN_USER_ID: str
+    API_ID: str
+    API_HASH: str
+    TELETHON_SOURCE_CHAT: str = ""
+    MOVIES_DIR: str
+    SHOWS_DIR: str
+    JELLYFIN_URL: str = ""
+    JELLYFIN_API_KEY: str = ""
+    PLEX_URL: str = ""
+    PLEX_TOKEN: str = ""
+    LOG_LEVEL: str = "INFO"
+
+
+@app.post("/api/config")
+async def save_config(payload: ConfigPayload):
+    env_path = ".env"
+    existing_lines = []
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as f:
+            existing_lines = f.readlines()
+
+    updates = payload.model_dump()
+    new_lines = []
+    updated_keys = set()
+
+    for line in existing_lines:
+        trimmed = line.strip()
+        if trimmed and not trimmed.startswith("#") and "=" in trimmed:
+            k = trimmed.split("=", 1)[0].strip()
+            if k in updates:
+                new_lines.append(f"{k}={updates[k]}\n")
+                updated_keys.add(k)
+                continue
+        new_lines.append(line)
+
+    for k, v in updates.items():
+        if k not in updated_keys:
+            new_lines.append(f"{k}={v}\n")
+
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.writelines(new_lines)
+
+    return {"status": "saved"}
