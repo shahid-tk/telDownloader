@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import time
-from typing import Optional
+from typing import Optional, Dict
 
 from telegram.error import BadRequest
 from services.download_tracker import tracker
@@ -42,6 +42,15 @@ class DownloadService:
         self.telethon_service = telethon_service
         self.source_chat = source_chat
         self.bot_id = bot_id
+        # Map chat_id -> active asyncio.Task for download
+        self.active_downloads: Dict[int, asyncio.Task] = {}
+
+    def cancel_download(self, chat_id: int) -> bool:
+        task = self.active_downloads.get(chat_id)
+        if task and not task.done():
+            task.cancel()
+            return True
+        return False
 
     async def _resolve_entity(self, client, fallback_chat_id: Optional[int]):
         if self.source_chat:
@@ -154,8 +163,9 @@ class DownloadService:
 
         last_edit_ts = 0.0
         last_percent = -1
+        start_mono = time.monotonic()
+        last_mono = start_mono
         last_bytes = 0
-        start_ts = time.time()
         last_text = None
 
         async def safe_edit(text: str):
@@ -176,16 +186,24 @@ class DownloadService:
         logger.info("Telethon download started: msg_id=%s dest=%s", source_msg.id, destination_path)
 
         def progress_callback(current: int, total: int):
-            nonlocal last_edit_ts, last_percent, last_bytes
+            nonlocal last_edit_ts, last_percent, last_bytes, last_mono
             if total <= 0:
                 return
 
             percent = int((current / total) * 100)
-            now = time.monotonic()
-            elapsed_total = now - start_ts
+            now_mono = time.monotonic()
+            elapsed_interval = now_mono - last_mono
 
-            # Calculate speed and ETA
-            speed_bps = current / elapsed_total if elapsed_total > 0 else 0
+            # Compute current speed
+            if elapsed_interval >= 1.0:
+                bytes_delta = current - last_bytes
+                speed_bps = bytes_delta / elapsed_interval if elapsed_interval > 0 else 0
+                last_bytes = current
+                last_mono = now_mono
+            else:
+                elapsed_total = now_mono - start_mono
+                speed_bps = current / elapsed_total if elapsed_total > 0 else 0
+
             speed_str = f"{_format_size(speed_bps)}/s"
             remaining_bytes = max(0, total - current)
             eta_seconds = remaining_bytes / speed_bps if speed_bps > 0 else 0
@@ -197,11 +215,11 @@ class DownloadService:
             # Throttle Telegram message updates to every 4s
             if percent == last_percent:
                 return
-            if (now - last_edit_ts) < 4 and percent < 100:
+            if (now_mono - last_edit_ts) < 4 and percent < 100:
                 return
 
             last_percent = percent
-            last_edit_ts = now
+            last_edit_ts = now_mono
             logger.info("Download progress: %s/%s (%s%%) @ %s, ETA: %s", current, total, percent, speed_str, eta_str)
             asyncio.create_task(
                 safe_edit(
@@ -221,6 +239,15 @@ class DownloadService:
             tracker.set_status(t_id, "processing")
             await safe_edit("Processing & saving media...")
             logger.info("Telethon download completed: %s", destination_path)
+        except asyncio.CancelledError:
+            tracker.set_status(t_id, "failed", "Cancelled by user")
+            if os.path.exists(destination_path):
+                try:
+                    os.remove(destination_path)
+                except Exception:
+                    pass
+            await safe_edit("❌ Download cancelled.")
+            raise
         except Exception as e:
             tracker.set_status(t_id, "failed", str(e))
             raise

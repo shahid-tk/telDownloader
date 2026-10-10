@@ -174,6 +174,7 @@ def build_application() -> Application:
     app = (
         Application.builder()
         .token(settings.bot_token)
+        .concurrent_updates(True)
         .post_init(post_init)
         .post_shutdown(post_shutdown)
         .build()
@@ -203,7 +204,7 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(meta_callbacks, pattern="^(meta_continue|meta_cancel)$"))
     app.add_handler(CallbackQueryHandler(delete_callbacks, pattern="^del_"))
 
-    app.add_handler(MessageHandler(filters.Document.ALL | filters.VIDEO, media_handler))
+    app.add_handler(MessageHandler(filters.Document.ALL | filters.VIDEO, media_handler, block=False))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
 
     app.add_error_handler(on_error)

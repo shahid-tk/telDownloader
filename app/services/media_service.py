@@ -102,6 +102,7 @@ class MediaService:
         logger.info("Download started to temp: %s", tmp_path)
 
         task_id = f"{chat_id}_{msg.message_id}_{int(time.time())}"
+        self.download_service.active_downloads[chat_id] = asyncio.current_task()
         try:
             await self.download_service.download_from_telethon_chat(
                 progress_message=progress_msg,
@@ -113,6 +114,11 @@ class MediaService:
                 task_id=task_id,
                 media_type=session.get("mode", "media"),
             )
+        except asyncio.CancelledError:
+            logger.info("Download task cancelled for chat_id=%s", chat_id)
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            return
         except Exception:
             logger.exception("Download failed")
             tracker.set_status(task_id, "failed", "Download failed")
@@ -120,6 +126,8 @@ class MediaService:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
             return
+        finally:
+            self.download_service.active_downloads.pop(chat_id, None)
 
         # 2. Determine clean video extension
         raw_ext = None
