@@ -25,7 +25,6 @@ class MediaServerService:
 
         url = f"{self.jellyfin_url}/Library/Refresh"
         headers = {
-            "X-Emby-Token": self.jellyfin_api_key,
             "Authorization": f'MediaBrowser Token="{self.jellyfin_api_key}"',
         }
         try:

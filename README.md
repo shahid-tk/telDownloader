@@ -1,43 +1,56 @@
-# Telegram Media Ingestion Bot
+# Telegram Media Ingestion Bot (v1.0 Final)
 
-Production-ready admin-only Telegram media ingestion bot using:
+Production-ready admin-only Telegram media ingestion bot for home media servers (Jellyfin, Plex).
 
-- python-telegram-bot
-- Telethon user session
-- MongoDB + Motor
-- Docker + Docker Compose
+- **python-telegram-bot** (v20+ async)
+- **Telethon** (MTProto client for large file downloads >2GB/4GB)
+- **MongoDB + Motor** (persistence for users, wizard sessions, and uploads)
+- **FFprobe / FFmpeg** (container detection and metadata inspection)
+- **Docker Compose**
 
-## Features
+---
 
-- Admin-only (single `ADMIN_USER_ID`)
-- Movie + Show workflows
-- Session persistence in MongoDB
-- Resume/discard unfinished session
-- Telethon large-file downloads with progress updates (~5s)
-- Duplicate detection with overwrite prompt
-- Plex/Jellyfin-compatible naming
+## Features (v1.0 Final)
 
-## Directory Layout (inside host)
+- **Admin-Only Guard**: Restricts commands and file downloads strictly to `ADMIN_USER_ID`.
+- **Zero-Click TV Show Ingestion**: Drop show files directly into the bot; show titles, seasons, and episodes are parsed automatically (e.g. `House.of.the.Dragon.S02E02...` -> `House of the Dragon/Season 02/s02e02.mkv`).
+- **Multi-Episode Support**: Handles multi-episode files (e.g. `Friends.S10E17.E18...` -> `s10e17-e18.mkv`), records each episode in MongoDB, and advances the episode counter.
+- **Truncated Extension Recovery**: Auto-detects container format via `ffprobe` when Telegram cuts off filenames (e.g. `.10`, `.HEV`, `.[@S`, `.H`, `.WEB-`), ensuring files always save with valid extensions (`.mkv`, `.mp4`).
+- **Movie Ingestion**: Direct naming without false positives from leftover encoder/ripper tags.
+- **Media Server Auto-Scan (Jellyfin & Plex)**: Silently triggers library refresh in the background (`POST /Library/Refresh` on Jellyfin, `GET /library/sections/all/refresh` on Plex) immediately after file moving.
+- **Duplicate Protection**: Warns if a file already exists with overwrite confirmation.
+- **Media Browser & Deletion**: Interactive `/delete` hierarchy to browse and remove ingested media directly from Telegram.
 
-- `/mnt/share_movies`
-- `/mnt/share_shows`
+---
+
+## Directory Layout
+
+- `/media/jellyfinData/movies` (Movies root directory)
+- `/media/jellyfinData/shows` (TV Shows root directory)
 - `./data` (Telethon session persistence)
-- `./logs` (bot logs)
+- `./logs` (Application logs)
+
+---
 
 ## Quick Start
 
-1. Clone project
-2. Copy environment:
+1. Clone project:
+   ```bash
+   git clone <repo>
+   cd telDownloader
+   ```
+2. Copy environment template:
    ```bash
    cp .env.example .env
    ```
-3. Fill `.env`:
-   - BOT_TOKEN
-   - API_ID
-   - API_HASH
-   - ADMIN_USER_ID
+3. Configure `.env`:
+   - `BOT_TOKEN`: Telegram bot token from @BotFather
+   - `API_ID` & `API_HASH`: Telegram API credentials from my.telegram.org
+   - `ADMIN_USER_ID`: Numeric Telegram user ID
+   - `JELLYFIN_URL` & `JELLYFIN_API_KEY`: *(Optional)* Jellyfin auto-scan credentials
+   - `PLEX_URL` & `PLEX_TOKEN`: *(Optional)* Plex auto-scan credentials
 
-4. Create Telethon session **once**:
+4. Create Telethon MTProto session **once**:
    ```bash
    docker compose run --rm bot python create_session.py
    ```
@@ -52,44 +65,13 @@ Production-ready admin-only Telegram media ingestion bot using:
    docker compose logs -f bot
    ```
 
-## Commands
+---
 
-- `/start`
-- `/help`
-- `/status`
-- `/cancel`
-- `/stop`
+## Bot Commands
 
-## Security
-
-Every command, callback, and upload is validated against `ADMIN_USER_ID`.
-Unauthorized users always get:
-
-`⛔ Unauthorized`
-
-## Production Deployment Notes
-
-- Keep `./data/telethon.session` backed up.
-- Restrict permissions on `./data` and media mount points.
-- Keep MongoDB volume backups (`mongo_data`).
-- Use a reverse proxy/firewall on the host as needed.
-- Ensure server clock/timezone are correct.
-
-## Troubleshooting
-
-### Session missing
-If bot fails at startup with session missing error:
-
-```bash
-docker compose run --rm bot python create_session.py
-```
-
-### Unauthorized errors
-Check `ADMIN_USER_ID` exactly matches your Telegram numeric user ID.
-
-### Mongo connection issue
-Verify `MONGO_URI` and container health:
-```bash
-docker compose ps
-docker compose logs -f mongodb
-```
+- `/start` - Start menu & manual mode picker (Movies / Shows)
+- `/status` - Current active session info & download stats
+- `/cancel` - Abort active session
+- `/stop` - Finish TV show upload batch
+- `/delete` - Interactive media browser & deletion tool
+- `/help` - Command list

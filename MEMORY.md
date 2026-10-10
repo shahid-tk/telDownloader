@@ -1,4 +1,4 @@
-# Repository Memory & Knowledge Base
+# Repository Memory & Knowledge Base (v1.0 Final)
 
 ## System Architecture & Data Model
 
@@ -20,60 +20,38 @@
    - `updated_at` (datetime)
 
 3. **`uploads`**:
-   - `media_type` (str): `"movie"` | `"show"`
-   - `title` (str)
+   - `type` (str): `"movie"` | `"show"`
+   - `movie_name` / `show_name` (str)
    - `season` (int, optional)
    - `episode` (int, optional)
-   - `file_path` (str): Target path on disk
-   - `file_size` (int): In bytes
-   - `video_codec`, `audio_codec`, `resolution`, `duration`: Metadata from `ffprobe`
+   - `filename` (str)
+   - `path` (str): Target path on disk
    - `uploaded_at` (datetime)
 
 ---
 
-## Critical Component Details & Gotchas
+## Critical Component Details
 
 ### 1. Telethon User Session (`services/telethon_service.py`)
-- Standard bot tokens have Telegram file download limits (20MB/50MB). To support multi-gigabyte media files (>2GB / 4GB), Telethon runs a MTProto user session via `app/data/telethon.session`.
-- Session creation is interactive and executed once via `docker compose run --rm bot python create_session.py`.
-- If `TELETHON_SOURCE_CHAT` is configured, Telethon searches that chat for message IDs; otherwise, it handles direct messages/forwards.
+- Standard bot tokens have Telegram file download limits (20MB/50MB). To support multi-gigabyte media files (>2GB / 4GB), Telethon runs an MTProto user session via `app/data/telethon.session`.
+- Bind-mounted to `./data:/app/data`, persisting across container restarts and redeployments.
 
-### 2. FFprobe Stream Inspection (`utils/ffprobe.py`)
-- Executed on media before final storage moving.
-- Extracts Video (codec, resolution, fps), Audio (codec, channels, language), and Subtitles (codecs, languages).
-- Formats inline summary with continuation buttons (`meta_continue`, `meta_cancel`).
+### 2. Media Server Integration (`services/media_server.py`)
+- Background, non-blocking library refresh triggers for **Jellyfin** (`POST /Library/Refresh` with `Authorization: MediaBrowser Token="..."`) and **Plex** (`GET /library/sections/all/refresh` with `X-Plex-Token`).
+- Optional; swallows all network exceptions so uploads never fail if media servers are offline or unresponsive. Runs completely silently.
 
-### 3. Media Path Conventions (`app/config.py`, `services/media_service.py`)
-- Movies mount: `MOVIES_DIR` (default `/mnt/movies_share`) -> `/{Movie (Year)}/{Movie (Year)}.{ext}`
-- Shows mount: `SHOWS_DIR` (default `/mnt/shows_share`) -> `/{Show Name}/Season {XX}/{Show Name} - S{XX}E{YY}.{ext}`
-- Temporary download staging: `/tmp` or internal buffer before moving to destination share.
+### 3. TV Show Filename & Extension Engine (`utils/helpers.py`, `utils/ffprobe.py`)
+- `parse_show_info`: Zero-click parsing of show title, season, and episodes directly from release filenames (cleaning release group tags, preserving release years).
+- `extract_season_episodes`: Multi-episode regex parsing (e.g., `S10E17.E18`, `S02E01-E02`).
+- `get_video_extension`: Sanitizes truncated Telegram file extensions (`.10`, `.HEV`, `.[@S`, `.H`, `.WEB-`, trailing `.`) using `ffprobe` format detection, defaulting cleanly to `.mkv`.
+- `format_season_episode`: Plex/Jellyfin standard format (`s10e17-e18.mkv`, `s02e02.mkv`).
 
-### 4. Progress Throttling & Telegram Rate Limits (`services/download_service.py`)
-- Progress callback uses elapsed time calculation to only update Telegram status message if `current_time - last_update >= 5.0` seconds to avoid `429 Too Many Requests / FloodWait`.
+### 4. Media Storage Paths
+- Movies mount: `MOVIES_DIR` (`/media/jellyfinData/movies`)
+- Shows mount: `SHOWS_DIR` (`/media/jellyfinData/shows`)
+- Temporary staging: `.tmp/` inside respective media mount points before moving.
 
-### 5. Deletion Engine (`handlers/delete_callbacks.py`)
-- Deep deletion hierarchy: Browse Movies vs Shows -> Select Show -> Select Season -> Select Episode -> Confirm.
-- Deletion removes the physical file from `/mnt/...` and deletes the matching record in the `uploads` collection. If a season/show folder is empty after deletion, the empty directory is cleaned up.
-
-### 6. Git Exclusion & Data Persistence Policies (`.gitignore`)
-- **Secrets & Credentials**: `.env`, `.env.*` are strictly ignored; `.env.example` is committed as a template.
-- **MTProto Sessions**: `data/` directory and `*.session` files contain active Telethon login credentials and are excluded from version control.
-- **Database & Logs**: MongoDB storage (`mongo_data/`, `*.db`) and application log files (`logs/`, `*.log*`) are persisted on disk/volumes but ignored in Git.
-- **Python / Virtual Environments**: `__pycache__/`, `*.pyc`, `venv/`, `.venv/` are excluded.
-
----
-
-## Environment Variables Reference
-| Variable | Description | Default |
-|---|---|---|
-| `BOT_TOKEN` | Telegram Bot Token from @BotFather | *(Required)* |
-| `ADMIN_USER_ID` | Numeric Telegram ID of authorized administrator | *(Required)* |
-| `API_ID` | Telegram API ID from my.telegram.org | *(Required)* |
-| `API_HASH` | Telegram API Hash from my.telegram.org | *(Required)* |
-| `SESSION_FILE` | Telethon `.session` file path | `/app/data/telethon.session` |
-| `MONGO_URI` | MongoDB connection URI | `mongodb://mongodb:27017/media_ingestion` |
-| `MOVIES_DIR` | Movies storage root directory | `/mnt/movies_share` |
-| `SHOWS_DIR` | TV shows storage root directory | `/mnt/shows_share` |
-| `TELETHON_SOURCE_CHAT` | Optional source chat ID / username | `""` |
-| `LOG_FILE` | Application log file path | `/app/logs/app.log` |
-| `LOG_LEVEL` | Log severity level | `INFO` |
+### 5. Git Exclusion & Data Persistence Policies (`.gitignore`)
+- Secrets & Credentials: `.env`, `.env.*` are ignored; `.env.example` is committed.
+- MTProto Sessions: `data/` and `*.session` are excluded.
+- Database & Logs: `mongo_data/` and `logs/` are excluded.
