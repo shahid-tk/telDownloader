@@ -19,7 +19,7 @@ class SessionService:
             },
         )
 
-    async def create_show_session(self, chat_id: int, show_name: str, season: int):
+    async def create_show_session(self, chat_id: int, show_name: str, season: int, next_episode: int = 1):
         await self.repo.upsert(
             chat_id,
             {
@@ -27,7 +27,7 @@ class SessionService:
                 "mode": "show",
                 "show_name": show_name,
                 "season": season,
-                "next_episode": 1,
+                "next_episode": next_episode,
                 "episodes_uploaded": 0,
                 "status": "uploading",
             },

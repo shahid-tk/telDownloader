@@ -319,7 +319,8 @@ class MediaService:
                 f"✅ Saved as {filename}\n\n"
                 f"Show: {session['show_name']}\n"
                 f"Season: {season:02d}\n"
-                f"Next expected: e{(max_ep + 1):02d}"
+                f"Next expected: e{(max_ep + 1):02d}\n\n"
+                f"Send next episode or use /stop when finished."
             )
             logger.info("Episode saved: %s", final_path)
 

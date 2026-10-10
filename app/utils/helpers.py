@@ -149,3 +149,90 @@ def format_season_episode(season: int, episodes: list[int] | int, ext: str) -> s
 
     ep_str = "-".join(f"e{ep:02d}" for ep in episodes)
     return f"s{season:02d}{ep_str}{ext}"
+
+
+async def get_all_available_shows(uploads_repo, shows_dir: str) -> list[str]:
+    """
+    Returns a sorted list of unique show names found in MongoDB uploads_repo
+    and on disk in shows_dir.
+    """
+    shows_set = set()
+
+    # From MongoDB
+    try:
+        db_shows = await uploads_repo.get_shows()
+        if db_shows:
+            shows_set.update(db_shows)
+    except Exception:
+        pass
+
+    # From disk
+    try:
+        p = Path(shows_dir)
+        if p.exists() and p.is_dir():
+            for item in p.iterdir():
+                if item.is_dir() and not item.name.startswith("."):
+                    shows_set.add(item.name)
+    except Exception:
+        pass
+
+    return sorted(list(shows_set), key=lambda s: s.lower())
+
+
+async def get_available_seasons(uploads_repo, shows_dir: str, show_name: str) -> list[int]:
+    """
+    Returns a sorted list of unique seasons for a given show from MongoDB and disk.
+    """
+    seasons_set = set()
+
+    # From MongoDB
+    try:
+        db_seasons = await uploads_repo.get_show_seasons(show_name)
+        if db_seasons:
+            seasons_set.update(db_seasons)
+    except Exception:
+        pass
+
+    # From disk
+    try:
+        show_path = Path(shows_dir) / show_name
+        if show_path.exists() and show_path.is_dir():
+            for item in show_path.iterdir():
+                if item.is_dir():
+                    m = re.search(r"Season\s*0*(\d+)", item.name, re.IGNORECASE)
+                    if m:
+                        seasons_set.add(int(m.group(1)))
+    except Exception:
+        pass
+
+    return sorted(list(seasons_set))
+
+
+async def get_next_expected_episode(uploads_repo, shows_dir: str, show_name: str, season: int) -> int:
+    """
+    Calculates the next expected episode number (max found + 1) for a show's season.
+    Defaults to 1 if no episodes are found.
+    """
+    episodes_set = set()
+
+    # From MongoDB
+    try:
+        db_eps = await uploads_repo.get_show_episodes(show_name, season)
+        if db_eps:
+            episodes_set.update(db_eps)
+    except Exception:
+        pass
+
+    # From disk
+    try:
+        season_dir = Path(shows_dir) / show_name / f"Season {season:02d}"
+        if season_dir.exists() and season_dir.is_dir():
+            for file in season_dir.iterdir():
+                if file.is_file():
+                    _, eps = extract_season_episodes(file.name)
+                    if eps:
+                        episodes_set.update(eps)
+    except Exception:
+        pass
+
+    return max(episodes_set) + 1 if episodes_set else 1

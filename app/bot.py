@@ -27,7 +27,12 @@ from handlers.movie import ask_movie_name
 from handlers.show import ask_show_name, ask_season
 from handlers.status import status_command
 from handlers.cancel import cancel_command
-from handlers.callbacks import menu_callbacks, unfinished_callbacks, overwrite_callbacks
+from handlers.callbacks import (
+    menu_callbacks,
+    unfinished_callbacks,
+    overwrite_callbacks,
+    show_callbacks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +186,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("delete", delete_command))
 
     app.add_handler(CallbackQueryHandler(menu_callbacks, pattern="^(mode_movie|mode_show)$"))
+    app.add_handler(CallbackQueryHandler(show_callbacks, pattern="^(show_new|show_cont\\||show_sel\\||show_season\\||show_season_new\\|)"))
     app.add_handler(CallbackQueryHandler(unfinished_callbacks, pattern="^(resume|discard)$"))
     app.add_handler(CallbackQueryHandler(overwrite_callbacks, pattern="^(overwrite_yes|overwrite_no)$"))
 
