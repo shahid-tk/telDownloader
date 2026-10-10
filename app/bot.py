@@ -225,8 +225,9 @@ async def run_all():
     )
     server = uvicorn.Server(config)
 
-    # Initialize and start bot application
+    # Initialize bot application
     await bot_app.initialize()
+    await post_init(bot_app)
     await bot_app.start()
     await bot_app.updater.start_polling(allowed_updates=["message", "callback_query"])
 
@@ -238,6 +239,7 @@ async def run_all():
     finally:
         await bot_app.updater.stop()
         await bot_app.stop()
+        await post_shutdown(bot_app)
         await bot_app.shutdown()
 
 

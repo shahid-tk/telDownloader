@@ -10,6 +10,8 @@ class Database:
         self._conn: aiosqlite.Connection | None = None
 
     async def connect(self) -> None:
+        if self._conn is not None:
+            return
         self._conn = await aiosqlite.connect(self.db_path)
         self._conn.row_factory = aiosqlite.Row
         await self._conn.execute("PRAGMA journal_mode=WAL;")
@@ -70,7 +72,6 @@ class Database:
             await cur.execute("CREATE INDEX IF NOT EXISTS idx_uploads_uploaded_at ON uploads(uploaded_at);")
 
             await self._conn.commit()
-            logger.info("SQLite schema initialized successfully at %s", self.db_path)
 
     @property
     def conn(self) -> aiosqlite.Connection:
@@ -83,3 +84,15 @@ class Database:
             await self._conn.close()
             self._conn = None
             logger.info("SQLite connection closed.")
+
+
+# Global persistent database instance
+db = None
+
+
+async def get_db(db_path: str) -> Database:
+    global db
+    if db is None:
+        db = Database(db_path)
+        await db.connect()
+    return db

@@ -508,15 +508,13 @@ async def websocket_downloads(websocket: WebSocket):
 
 @app.get("/api/stats")
 async def get_stats():
-    from database.sqlite import Database
+    from database.sqlite import get_db
     from database.repositories.uploads_repo import UploadsRepository
 
-    db = Database(settings.sqlite_path)
-    await db.connect()
+    db = await get_db(settings.sqlite_path)
     repo = UploadsRepository(db.conn)
     movies = await repo.get_movies()
     shows = await repo.get_shows()
-    await db.close()
 
     return {
         "movies_count": len(movies),
@@ -528,14 +526,12 @@ async def get_stats():
 
 @app.get("/api/library")
 async def get_library():
-    from database.sqlite import Database
+    from database.sqlite import get_db
     from database.repositories.uploads_repo import UploadsRepository
 
-    db = Database(settings.sqlite_path)
-    await db.connect()
+    db = await get_db(settings.sqlite_path)
     repo = UploadsRepository(db.conn)
     items = await repo.get_recent_uploads(limit=200)
-    await db.close()
     return JSONResponse(items)
 
 
