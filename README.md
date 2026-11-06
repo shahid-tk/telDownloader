@@ -74,8 +74,8 @@ API_ID=12345678
 API_HASH=0123456789abcdef0123456789abcdef
 
 # Media Directories (Paths on host)
-MOVIES_DIR=/media/jellyfinData/movies
-SHOWS_DIR=/media/jellyfinData/shows
+MOVIES_DIR=./media/movies
+SHOWS_DIR=./media/shows
 
 # Web Interface
 WEB_PORT=8088
