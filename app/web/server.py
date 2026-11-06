@@ -99,8 +99,7 @@ LOGIN_HTML = """<!DOCTYPE html>
       </div>
       <div>
         <label class="block text-xs font-medium text-slate-300 mb-1.5">Password</label>
-        <input type="password" name="password" placeholder="{pwd_placeholder}" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition">
-        {helper_note}
+        <input type="password" name="password" placeholder="••••••••" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition">
       </div>
       <button type="submit" class="w-full py-2.5 px-4 rounded-xl text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20 transition duration-150">
         Sign In
@@ -620,14 +619,7 @@ async def login_get(request: Request):
     if is_authenticated(request):
         return RedirectResponse(url="/", status_code=303)
     username = settings.web_username or "admin"
-    pwd_hint = "Leave empty if none configured" if not settings.web_password else "••••••••"
-    helper = '<p class="text-[11px] text-slate-400 mt-1">Default setup: leave password empty and click Sign In</p>' if not settings.web_password else ""
-    content = (
-        LOGIN_HTML.replace("{error_placeholder}", "")
-        .replace("{username_val}", username)
-        .replace("{pwd_placeholder}", pwd_hint)
-        .replace("{helper_note}", helper)
-    )
+    content = LOGIN_HTML.replace("{error_placeholder}", "").replace("{username_val}", username)
     return HTMLResponse(content=content)
 
 
@@ -669,14 +661,7 @@ async def login_post(request: Request):
       <span class="text-rose-400">⚠️</span> Invalid username or password.
     </div>
     """
-    pwd_hint = "Leave empty if none configured" if not settings.web_password else "••••••••"
-    helper = '<p class="text-[11px] text-slate-400 mt-1">Default setup: leave password empty and click Sign In</p>' if not settings.web_password else ""
-    content = (
-        LOGIN_HTML.replace("{error_placeholder}", error_html)
-        .replace("{username_val}", username or expected_user)
-        .replace("{pwd_placeholder}", pwd_hint)
-        .replace("{helper_note}", helper)
-    )
+    content = LOGIN_HTML.replace("{error_placeholder}", error_html).replace("{username_val}", username or expected_user)
     return HTMLResponse(content=content, status_code=401)
 
 
