@@ -183,17 +183,17 @@ def build_application() -> Application:
     from handlers.delete import delete_command
     from handlers.delete_callbacks import delete_callbacks
 
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("status", status_command))
-    app.add_handler(CommandHandler("cancel", cancel_command))
-    app.add_handler(CommandHandler("stop", stop_command))
-    app.add_handler(CommandHandler("delete", delete_command))
+    app.add_handler(CommandHandler("start", start_command, block=False))
+    app.add_handler(CommandHandler("help", help_command, block=False))
+    app.add_handler(CommandHandler("status", status_command, block=False))
+    app.add_handler(CommandHandler("cancel", cancel_command, block=False))
+    app.add_handler(CommandHandler("stop", stop_command, block=False))
+    app.add_handler(CommandHandler("delete", delete_command, block=False))
 
-    app.add_handler(CallbackQueryHandler(menu_callbacks, pattern="^(mode_movie|mode_show)$"))
-    app.add_handler(CallbackQueryHandler(show_callbacks, pattern="^(show_new|show_cont\\||show_sel\\||show_season\\||show_season_new\\|)"))
-    app.add_handler(CallbackQueryHandler(unfinished_callbacks, pattern="^(resume|discard)$"))
-    app.add_handler(CallbackQueryHandler(overwrite_callbacks, pattern="^(overwrite_yes|overwrite_no)$"))
+    app.add_handler(CallbackQueryHandler(menu_callbacks, pattern="^(mode_movie|mode_show)$", block=False))
+    app.add_handler(CallbackQueryHandler(show_callbacks, pattern="^(show_new|show_cont\\||show_sel\\||show_season\\||show_season_new\\|)", block=False))
+    app.add_handler(CallbackQueryHandler(unfinished_callbacks, pattern="^(resume|discard)$", block=False))
+    app.add_handler(CallbackQueryHandler(overwrite_callbacks, pattern="^(overwrite_yes|overwrite_no)$", block=False))
 
     async def meta_callbacks(update, context):
         from utils.auth import guard_admin
@@ -201,11 +201,11 @@ def build_application() -> Application:
             return
         await context.application.bot_data["media_service"].metadata_decision(update, context)
 
-    app.add_handler(CallbackQueryHandler(meta_callbacks, pattern="^(meta_continue|meta_cancel)$"))
-    app.add_handler(CallbackQueryHandler(delete_callbacks, pattern="^del_"))
+    app.add_handler(CallbackQueryHandler(meta_callbacks, pattern="^(meta_continue|meta_cancel)$", block=False))
+    app.add_handler(CallbackQueryHandler(delete_callbacks, pattern="^del_", block=False))
 
     app.add_handler(MessageHandler(filters.Document.ALL | filters.VIDEO, media_handler, block=False))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_router, block=False))
 
     app.add_error_handler(on_error)
 
@@ -226,9 +226,8 @@ async def run_all():
     )
     server = uvicorn.Server(config)
 
-    # Initialize bot application
+    # Initialize bot application (runs post_init automatically)
     await bot_app.initialize()
-    await post_init(bot_app)
     await bot_app.start()
     await bot_app.updater.start_polling(allowed_updates=["message", "callback_query"])
 

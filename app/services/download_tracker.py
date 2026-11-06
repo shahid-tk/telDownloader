@@ -1,6 +1,6 @@
 import asyncio
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any, Callable
 from pydantic import BaseModel
 
 
@@ -24,6 +24,23 @@ class DownloadTracker:
         self.active_tasks: Dict[str, DownloadTask] = {}
         self.history: List[DownloadTask] = []
         self._listeners: List[asyncio.Queue] = []
+        self._cancel_callbacks: Dict[str, Callable[[], Any]] = {}
+
+    def register_cancel_callback(self, task_id: str, callback: Callable[[], Any]) -> None:
+        self._cancel_callbacks[task_id] = callback
+
+    def unregister_cancel_callback(self, task_id: str) -> None:
+        self._cancel_callbacks.pop(task_id, None)
+
+    def cancel_task(self, task_id: str) -> bool:
+        cb = self._cancel_callbacks.get(task_id)
+        if cb:
+            try:
+                cb()
+            except Exception:
+                pass
+            return True
+        return False
 
     def start_download(self, task_id: str, name: str, media_type: str, size: int) -> DownloadTask:
         task = DownloadTask(
@@ -70,6 +87,7 @@ class DownloadTracker:
             if len(self.history) > 50:
                 self.history.pop()
             self.active_tasks.pop(task_id, None)
+            self.unregister_cancel_callback(task_id)
         self.notify_change()
 
     def get_all(self) -> dict:

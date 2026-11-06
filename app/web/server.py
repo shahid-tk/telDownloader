@@ -330,9 +330,12 @@ HTML_CONTENT = """<!DOCTYPE html>
                   <p class="text-xs text-slate-400 capitalize">${item.media_type} Mode &bull; Status: <span class="text-blue-400 font-medium">${item.status}</span></p>
                 </div>
               </div>
-              <div class="text-right">
-                <span class="text-lg font-bold text-blue-400">${item.percent}%</span>
-                <p class="text-xs text-slate-400">${item.speed_str} &bull; ETA: ${item.eta_str}</p>
+              <div class="text-right flex items-center space-x-4">
+                <div>
+                  <span class="text-lg font-bold text-blue-400">${item.percent}%</span>
+                  <p class="text-xs text-slate-400">${item.speed_str} &bull; ETA: ${item.eta_str}</p>
+                </div>
+                <button onclick="cancelDownload('${item.id}')" class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-rose-500/15 text-rose-400 hover:bg-rose-500/30 border border-rose-500/30 transition">Cancel</button>
               </div>
             </div>
             <div class="w-full bg-slate-800 rounded-full h-2.5 overflow-hidden">
@@ -375,6 +378,18 @@ HTML_CONTENT = """<!DOCTYPE html>
         document.getElementById('stat-servers').textContent = serverText.length > 0 ? serverText.join(' & ') : 'None Configured';
       } catch (e) {
         console.error(e);
+      }
+    }
+
+    async function cancelDownload(taskId) {
+      if (!confirm("Are you sure you want to cancel this download?")) return;
+      try {
+        const res = await fetch('/api/downloads/' + encodeURIComponent(taskId) + '/cancel', { method: 'POST' });
+        if (res.ok) {
+          console.log("Download cancel requested for", taskId);
+        }
+      } catch (e) {
+        console.error("Failed to cancel download:", e);
       }
     }
 
@@ -484,6 +499,15 @@ async def get_index():
 @app.get("/api/downloads")
 async def get_downloads():
     return JSONResponse(tracker.get_all())
+
+
+@app.post("/api/downloads/{task_id}/cancel")
+async def cancel_download_endpoint(task_id: str):
+    success = tracker.cancel_task(task_id)
+    if success:
+        return {"status": "cancelled", "task_id": task_id}
+    tracker.set_status(task_id, "failed", "Cancelled via Web UI")
+    return {"status": "marked_failed", "task_id": task_id}
 
 
 @app.websocket("/ws/downloads")

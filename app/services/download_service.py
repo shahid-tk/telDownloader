@@ -48,6 +48,7 @@ class DownloadService:
     def cancel_download(self, chat_id: int) -> bool:
         task = self.active_downloads.get(chat_id)
         if task and not task.done():
+            logger.info("Cancelling active download task for chat_id=%s", chat_id)
             task.cancel()
             return True
         return False
@@ -59,7 +60,13 @@ class DownloadService:
             except Exception:
                 logger.exception("Failed resolving source_chat=%s", self.source_chat)
 
-        me = await client.get_me()
+        me = None
+        try:
+            me = await client.get_me()
+        except (ConnectionError, OSError):
+            logger.warning("Disconnected during get_me(), attempting reconnect...")
+            client = await self.telethon_service.ensure_connected()
+            me = await client.get_me()
 
         if fallback_chat_id is not None:
             if me and int(fallback_chat_id) == me.id:
@@ -100,11 +107,18 @@ class DownloadService:
     ) -> None:
         os.makedirs(os.path.dirname(destination_path), exist_ok=True)
 
-        client = self.telethon_service.client
+        # Always ensure Telethon client is connected before proceeding
+        client = await self.telethon_service.ensure_connected()
         if not client:
             raise RuntimeError("Telethon client not initialized")
 
-        entity = await self._resolve_entity(client, fallback_chat_id)
+        try:
+            entity = await self._resolve_entity(client, fallback_chat_id)
+        except (ConnectionError, OSError):
+            logger.warning("Reconnecting before resolving entity...")
+            client = await self.telethon_service.ensure_connected()
+            entity = await self._resolve_entity(client, fallback_chat_id)
+
         if entity is None:
             raise RuntimeError("Unable to resolve any Telethon source entity")
 
@@ -160,6 +174,14 @@ class DownloadService:
         display_name = expected_file_name or os.path.basename(destination_path)
         total_size = expected_file_size or getattr(getattr(source_msg, "file", None), "size", 0) or 0
         tracker.start_download(t_id, display_name, media_type, total_size)
+
+        current_task = asyncio.current_task()
+        if current_task and fallback_chat_id:
+            self.active_downloads[fallback_chat_id] = current_task
+
+        # Register cancel callback so Web UI can cancel this download
+        if current_task:
+            tracker.register_cancel_callback(t_id, lambda: current_task.cancel())
 
         last_edit_ts = 0.0
         last_percent = -1
@@ -240,6 +262,7 @@ class DownloadService:
             await safe_edit("Processing & saving media...")
             logger.info("Telethon download completed: %s", destination_path)
         except asyncio.CancelledError:
+            logger.info("Telethon download cancelled by user: task_id=%s", t_id)
             tracker.set_status(t_id, "failed", "Cancelled by user")
             if os.path.exists(destination_path):
                 try:
@@ -249,5 +272,10 @@ class DownloadService:
             await safe_edit("❌ Download cancelled.")
             raise
         except Exception as e:
+            logger.exception("Telethon download error: %s", e)
             tracker.set_status(t_id, "failed", str(e))
             raise
+        finally:
+            tracker.unregister_cancel_callback(t_id)
+            if fallback_chat_id:
+                self.active_downloads.pop(fallback_chat_id, None)
