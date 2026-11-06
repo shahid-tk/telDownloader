@@ -39,8 +39,6 @@
 - **Real-Time Telemetry**: Live WebSocket connection (`/ws/downloads`) streaming transfer rates, progress percentages, transferred bytes, and precise time-to-completion (ETA).
 - **Library Browser & File Manager**: Browse ingested movies and series directly from the browser, with one-click deletion and disk reclamation.
 - **Dynamic Live Configuration**: Update API credentials, folder paths, and log levels directly through the UI without restarting the container or manually editing `.env`.
-- **Credential Masking**: Sensitive tokens (Bot Token, User ID, API ID, API Hash, Passwords) are masked by default with show/hide toggle controls (`👁️` / `🙈`).
-- **Session Authentication**: Secured by HTTP-only session cookies (`tel_session`) with preconfigured out-of-the-box open setup and optional instant password protection.
 
 ---
 
