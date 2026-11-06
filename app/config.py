@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     # Web Dashboard
     web_host: str = "0.0.0.0"
     web_port: int = 8088
+    web_username: str = ""
+    web_password: str = ""
 
     log_file: str = "/app/logs/app.log"
     log_level: str = "INFO"

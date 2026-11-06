@@ -1,16 +1,79 @@
+import base64
+import hashlib
 import os
 import re
-from typing import Dict, Any
+import secrets
+from typing import Dict, Any, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
 from pydantic import BaseModel
 
 from config import settings
 from services.download_tracker import tracker
 
+
+def get_auth_token() -> str:
+    data = f"{settings.web_username}:{settings.web_password}".encode("utf-8")
+    return hashlib.sha256(data).hexdigest()
+
+
+def verify_credentials(auth_header: Optional[str], cookie_token: Optional[str]) -> bool:
+    if not settings.web_username or not settings.web_password:
+        return True
+
+    valid_token = get_auth_token()
+    if cookie_token and secrets.compare_digest(cookie_token, valid_token):
+        return True
+
+    if not auth_header or not auth_header.startswith("Basic "):
+        return False
+
+    try:
+        encoded = auth_header.split(" ", 1)[1]
+        decoded = base64.b64decode(encoded).decode("utf-8")
+        if ":" not in decoded:
+            return False
+        username, password = decoded.split(":", 1)
+        user_matches = secrets.compare_digest(username, settings.web_username)
+        pass_matches = secrets.compare_digest(password, settings.web_password)
+        return user_matches and pass_matches
+    except Exception:
+        return False
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if settings.web_username and settings.web_password:
+            if request.url.path == "/logout":
+                return await call_next(request)
+
+            auth_header = request.headers.get("authorization")
+            cookie_token = request.cookies.get("teldownloader_auth")
+            if not verify_credentials(auth_header, cookie_token):
+                return Response(
+                    status_code=401,
+                    content="Unauthorized: Access denied. Please provide valid web credentials.",
+                    headers={"WWW-Authenticate": 'Basic realm="telDownloader Dashboard"'},
+                )
+            response = await call_next(request)
+            if auth_header and not cookie_token:
+                response.set_cookie(
+                    key="teldownloader_auth",
+                    value=get_auth_token(),
+                    httponly=True,
+                    samesite="lax",
+                    path="/",
+                )
+            return response
+        return await call_next(request)
+
+
 app = FastAPI(title="telDownloader Web Dashboard", docs_url="/api/docs")
 
+app.add_middleware(AuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -65,6 +128,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         <button onclick="toggleTab('downloads')" id="tab-btn-downloads" class="px-3.5 py-1.5 rounded-lg text-sm font-medium bg-blue-600 text-white shadow-sm transition">Monitor</button>
         <button onclick="toggleTab('library')" id="tab-btn-library" class="px-3.5 py-1.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800 transition">Library</button>
         <button onclick="toggleTab('config')" id="tab-btn-config" class="px-3.5 py-1.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800 transition">Configuration</button>
+        <a href="/logout" title="Sign Out" class="px-3 py-1.5 rounded-lg text-xs font-medium text-slate-400 hover:text-rose-400 hover:bg-slate-800/80 transition flex items-center gap-1 border border-transparent hover:border-rose-500/20">Sign Out</a>
       </div>
     </div>
   </header>
@@ -252,6 +316,20 @@ HTML_CONTENT = """<!DOCTYPE html>
                 <option value="WARNING">WARNING</option>
                 <option value="ERROR">ERROR</option>
               </select>
+            </div>
+            <div class="border-t border-slate-800 pt-3">
+              <h4 class="text-xs font-semibold text-blue-400 uppercase tracking-wider mb-2">Web Dashboard Security</h4>
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block text-xs font-medium text-slate-400 mb-1">Web Username</label>
+                  <input type="text" id="cfg-WEB_USERNAME" placeholder="Leave blank to disable" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+                </div>
+                <div>
+                  <label class="block text-xs font-medium text-slate-400 mb-1">Web Password</label>
+                  <input type="password" id="cfg-WEB_PASSWORD" placeholder="Leave blank to disable" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+                </div>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-1">Configuring a username & password requires credentials to access this dashboard.</p>
             </div>
           </div>
         </form>
@@ -458,6 +536,8 @@ HTML_CONTENT = """<!DOCTYPE html>
         JELLYFIN_API_KEY: document.getElementById('cfg-JELLYFIN_API_KEY').value,
         PLEX_URL: document.getElementById('cfg-PLEX_URL').value,
         PLEX_TOKEN: document.getElementById('cfg-PLEX_TOKEN').value,
+        WEB_USERNAME: document.getElementById('cfg-WEB_USERNAME')?.value || '',
+        WEB_PASSWORD: document.getElementById('cfg-WEB_PASSWORD')?.value || '',
         LOG_LEVEL: document.getElementById('cfg-LOG_LEVEL').value,
       };
 
@@ -491,6 +571,22 @@ HTML_CONTENT = """<!DOCTYPE html>
 """
 
 
+@app.get("/logout")
+async def logout():
+    response = HTMLResponse(
+        content="""<!DOCTYPE html><html><body style="background:#020617;color:#94a3b8;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;">
+        <div style="text-align:center;">
+          <h2 style="color:#f8fafc;margin-bottom:8px;">Signed out</h2>
+          <p><a href="/" style="color:#38bdf8;text-decoration:none;">Click here to sign in again</a></p>
+        </div>
+        </body></html>""",
+        status_code=401,
+        headers={"WWW-Authenticate": 'Basic realm="telDownloader Dashboard"'},
+    )
+    response.delete_cookie("teldownloader_auth", path="/")
+    return response
+
+
 @app.get("/", response_class=HTMLResponse)
 async def get_index():
     return HTMLResponse(content=HTML_CONTENT)
@@ -512,6 +608,15 @@ async def cancel_download_endpoint(task_id: str):
 
 @app.websocket("/ws/downloads")
 async def websocket_downloads(websocket: WebSocket):
+    if settings.web_username and settings.web_password:
+        auth_header = websocket.headers.get("authorization")
+        cookie_token = websocket.cookies.get("teldownloader_auth")
+        query_token = websocket.query_params.get("auth")
+        valid = verify_credentials(auth_header, cookie_token) or (query_token and secrets.compare_digest(query_token, get_auth_token()))
+        if not valid:
+            await websocket.close(code=1008)
+            return
+
     await websocket.accept()
     # Send immediate state
     await websocket.send_json(tracker.get_all())
@@ -586,11 +691,18 @@ class ConfigPayload(BaseModel):
     JELLYFIN_API_KEY: str = ""
     PLEX_URL: str = ""
     PLEX_TOKEN: str = ""
+    WEB_USERNAME: str = ""
+    WEB_PASSWORD: str = ""
     LOG_LEVEL: str = "INFO"
 
 
 @app.post("/api/config")
 async def save_config(payload: ConfigPayload):
+    # Update in-memory settings
+    settings.web_username = payload.WEB_USERNAME
+    settings.web_password = payload.WEB_PASSWORD
+    settings.log_level = payload.LOG_LEVEL
+
     env_path = ".env"
     existing_lines = []
     if os.path.exists(env_path):
