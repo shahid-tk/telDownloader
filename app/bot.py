@@ -112,7 +112,15 @@ async def on_error(update, context):
         pass
 
 
+_bot_initialized = False
+
+
 async def post_init(app: Application):
+    global _bot_initialized
+    if _bot_initialized:
+        return
+    _bot_initialized = True
+
     logger.info("startup")
 
     ensure_dir("/app/data")
@@ -226,8 +234,9 @@ async def run_all():
     )
     server = uvicorn.Server(config)
 
-    # Initialize bot application (runs post_init automatically)
+    # Initialize bot application
     await bot_app.initialize()
+    await post_init(bot_app)
     await bot_app.start()
     await bot_app.updater.start_polling(allowed_updates=["message", "callback_query"])
 
