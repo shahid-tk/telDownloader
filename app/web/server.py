@@ -4,11 +4,11 @@ import os
 import re
 import secrets
 from typing import Dict, Any, Optional
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from urllib.parse import parse_qs
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import Response
 from pydantic import BaseModel
 
 from config import settings
@@ -17,59 +17,49 @@ from services.download_tracker import tracker
 
 def get_auth_token() -> str:
     user = settings.web_username or "admin"
-    data = f"{user}:{settings.web_password}".encode("utf-8")
+    pwd = settings.web_password or ""
+    data = f"{user}:{pwd}:teldownloader_secure".encode("utf-8")
     return hashlib.sha256(data).hexdigest()
 
 
-def verify_credentials(auth_header: Optional[str], cookie_token: Optional[str]) -> bool:
+def is_authenticated(request: Request) -> bool:
     if not settings.web_password:
         return True
 
-    valid_token = get_auth_token()
-    if cookie_token and secrets.compare_digest(cookie_token, valid_token):
+    cookie_token = request.cookies.get("tel_session")
+    if cookie_token and secrets.compare_digest(cookie_token, get_auth_token()):
         return True
 
-    if not auth_header or not auth_header.startswith("Basic "):
-        return False
+    # Also support Basic Auth header for API consumers/curl
+    auth_header = request.headers.get("authorization")
+    if auth_header and auth_header.startswith("Basic "):
+        try:
+            encoded = auth_header.split(" ", 1)[1]
+            decoded = base64.b64decode(encoded).decode("utf-8")
+            if ":" in decoded:
+                username, password = decoded.split(":", 1)
+                expected_user = settings.web_username or "admin"
+                return secrets.compare_digest(username, expected_user) and secrets.compare_digest(password, settings.web_password)
+        except Exception:
+            pass
 
-    try:
-        encoded = auth_header.split(" ", 1)[1]
-        decoded = base64.b64decode(encoded).decode("utf-8")
-        if ":" not in decoded:
-            return False
-        username, password = decoded.split(":", 1)
-        expected_user = settings.web_username or "admin"
-        user_matches = secrets.compare_digest(username, expected_user)
-        pass_matches = secrets.compare_digest(password, settings.web_password)
-        return user_matches and pass_matches
-    except Exception:
-        return False
+    return False
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request, call_next):
-        if settings.web_password:
-            if request.url.path == "/logout":
-                return await call_next(request)
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
 
-            auth_header = request.headers.get("authorization")
-            cookie_token = request.cookies.get("teldownloader_auth")
-            if not verify_credentials(auth_header, cookie_token):
-                return Response(
-                    status_code=401,
-                    content="Unauthorized: Access denied. Please provide valid web credentials.",
-                    headers={"WWW-Authenticate": 'Basic realm="telDownloader Dashboard"'},
-                )
-            response = await call_next(request)
-            if auth_header and not cookie_token:
-                response.set_cookie(
-                    key="teldownloader_auth",
-                    value=get_auth_token(),
-                    httponly=True,
-                    samesite="lax",
-                    path="/",
-                )
-            return response
+        # Always allow login and logout endpoints
+        if path in ("/login", "/logout"):
+            return await call_next(request)
+
+        # If a password is set and user is not authenticated:
+        if settings.web_password and not is_authenticated(request):
+            if path.startswith("/api/"):
+                return JSONResponse({"detail": "Unauthorized: Please sign in."}, status_code=401)
+            return RedirectResponse(url="/login", status_code=303)
+
         return await call_next(request)
 
 
@@ -83,6 +73,43 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+LOGIN_HTML = """<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign In - telDownloader</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex items-center justify-center p-4 font-sans selection:bg-blue-600 selection:text-white">
+  <div class="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-2xl space-y-6">
+    <div class="text-center space-y-2">
+      <div class="w-12 h-12 rounded-2xl bg-gradient-to-tr from-blue-600 to-indigo-500 mx-auto flex items-center justify-center text-2xl shadow-lg shadow-blue-500/20">
+        📥
+      </div>
+      <h1 class="text-xl font-bold text-white tracking-wide">telDownloader</h1>
+      <p class="text-xs text-slate-400">Media Ingestion & Live Monitor</p>
+    </div>
+
+    {error_placeholder}
+
+    <form method="POST" action="/login" class="space-y-4">
+      <div>
+        <label class="block text-xs font-medium text-slate-300 mb-1.5">Username</label>
+        <input type="text" name="username" value="{username_val}" required autofocus class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-300 mb-1.5">Password</label>
+        <input type="password" name="password" placeholder="Leave empty if none" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition">
+      </div>
+      <button type="submit" class="w-full py-2.5 px-4 rounded-xl text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20 transition duration-150">
+        Sign In
+      </button>
+    </form>
+  </div>
+</body>
+</html>"""
 
 HTML_CONTENT = """<!DOCTYPE html>
 <html lang="en" class="dark">
@@ -589,23 +616,69 @@ HTML_CONTENT = """<!DOCTYPE html>
 """
 
 
+@app.api_route("/login", methods=["GET", "HEAD"], response_class=HTMLResponse)
+async def login_get(request: Request):
+    if not settings.web_password or is_authenticated(request):
+        return RedirectResponse(url="/", status_code=303)
+    username = settings.web_username or "admin"
+    content = LOGIN_HTML.replace("{error_placeholder}", "").replace("{username_val}", username)
+    return HTMLResponse(content=content)
+
+
+@app.post("/login")
+async def login_post(request: Request):
+    username = ""
+    password = ""
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        payload = await request.json()
+        username = payload.get("username", "")
+        password = payload.get("password", "")
+    else:
+        body = (await request.body()).decode("utf-8")
+        parsed = parse_qs(body)
+        username = parsed.get("username", [""])[0]
+        password = parsed.get("password", [""])[0]
+
+    expected_user = settings.web_username or "admin"
+    valid = False
+    if not settings.web_password:
+        valid = True
+    elif (
+        secrets.compare_digest(username, expected_user)
+        and secrets.compare_digest(password, settings.web_password)
+    ):
+        valid = True
+
+    if valid:
+        response = RedirectResponse(url="/", status_code=303)
+        response.set_cookie(
+            key="tel_session",
+            value=get_auth_token(),
+            httponly=True,
+            samesite="lax",
+            path="/",
+            max_age=86400 * 30,
+        )
+        return response
+
+    error_html = """
+    <div class="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+      <span class="text-rose-400">⚠️</span> Invalid username or password.
+    </div>
+    """
+    content = LOGIN_HTML.replace("{error_placeholder}", error_html).replace("{username_val}", username or expected_user)
+    return HTMLResponse(content=content, status_code=401)
+
+
 @app.get("/logout")
 async def logout():
-    response = HTMLResponse(
-        content="""<!DOCTYPE html><html><body style="background:#020617;color:#94a3b8;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;">
-        <div style="text-align:center;">
-          <h2 style="color:#f8fafc;margin-bottom:8px;">Signed out</h2>
-          <p><a href="/" style="color:#38bdf8;text-decoration:none;">Click here to sign in again</a></p>
-        </div>
-        </body></html>""",
-        status_code=401,
-        headers={"WWW-Authenticate": 'Basic realm="telDownloader Dashboard"'},
-    )
-    response.delete_cookie("teldownloader_auth", path="/")
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie("tel_session", path="/")
     return response
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def get_index():
     return HTMLResponse(content=HTML_CONTENT)
 
@@ -627,10 +700,11 @@ async def cancel_download_endpoint(task_id: str):
 @app.websocket("/ws/downloads")
 async def websocket_downloads(websocket: WebSocket):
     if settings.web_password:
-        auth_header = websocket.headers.get("authorization")
-        cookie_token = websocket.cookies.get("teldownloader_auth")
+        cookie_token = websocket.cookies.get("tel_session")
         query_token = websocket.query_params.get("auth")
-        valid = verify_credentials(auth_header, cookie_token) or (query_token and secrets.compare_digest(query_token, get_auth_token()))
+        valid = (cookie_token and secrets.compare_digest(cookie_token, get_auth_token())) or (
+            query_token and secrets.compare_digest(query_token, get_auth_token())
+        )
         if not valid:
             await websocket.close(code=1008)
             return
@@ -754,4 +828,17 @@ async def save_config(payload: ConfigPayload):
     with open(env_path, "w", encoding="utf-8") as f:
         f.writelines(new_lines)
 
-    return {"status": "saved"}
+    response = JSONResponse({"status": "saved"})
+    if settings.web_password:
+        response.set_cookie(
+            key="tel_session",
+            value=get_auth_token(),
+            httponly=True,
+            samesite="lax",
+            path="/",
+            max_age=86400 * 30,
+        )
+    else:
+        response.delete_cookie("tel_session", path="/")
+
+    return response
