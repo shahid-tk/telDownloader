@@ -24,7 +24,7 @@ services:
       PLEX_URL: ${PLEX_URL:-}
       PLEX_TOKEN: ${PLEX_TOKEN:-}
       WEB_PORT: 8088
-      WEB_USERNAME: ${WEB_USERNAME:-}
+      WEB_USERNAME: ${WEB_USERNAME:-admin}
       WEB_PASSWORD: ${WEB_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:

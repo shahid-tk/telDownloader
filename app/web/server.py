@@ -16,12 +16,13 @@ from services.download_tracker import tracker
 
 
 def get_auth_token() -> str:
-    data = f"{settings.web_username}:{settings.web_password}".encode("utf-8")
+    user = settings.web_username or "admin"
+    data = f"{user}:{settings.web_password}".encode("utf-8")
     return hashlib.sha256(data).hexdigest()
 
 
 def verify_credentials(auth_header: Optional[str], cookie_token: Optional[str]) -> bool:
-    if not settings.web_username or not settings.web_password:
+    if not settings.web_password:
         return True
 
     valid_token = get_auth_token()
@@ -37,7 +38,8 @@ def verify_credentials(auth_header: Optional[str], cookie_token: Optional[str]) 
         if ":" not in decoded:
             return False
         username, password = decoded.split(":", 1)
-        user_matches = secrets.compare_digest(username, settings.web_username)
+        expected_user = settings.web_username or "admin"
+        user_matches = secrets.compare_digest(username, expected_user)
         pass_matches = secrets.compare_digest(password, settings.web_password)
         return user_matches and pass_matches
     except Exception:
@@ -46,7 +48,7 @@ def verify_credentials(auth_header: Optional[str], cookie_token: Optional[str]) 
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
-        if settings.web_username and settings.web_password:
+        if settings.web_password:
             if request.url.path == "/logout":
                 return await call_next(request)
 
@@ -317,19 +319,22 @@ HTML_CONTENT = """<!DOCTYPE html>
                 <option value="ERROR">ERROR</option>
               </select>
             </div>
-            <div class="border-t border-slate-800 pt-3">
-              <h4 class="text-xs font-semibold text-blue-400 uppercase tracking-wider mb-2">Web Dashboard Security</h4>
+            <div class="border-t border-slate-800 pt-4 mt-2">
+              <div class="flex items-center justify-between mb-3">
+                <h4 class="text-xs font-semibold text-blue-400 uppercase tracking-wider">Web Dashboard Security</h4>
+                <span id="auth-status-badge" class="px-2 py-0.5 rounded text-[11px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">No Password (Open Access)</span>
+              </div>
               <div class="grid grid-cols-2 gap-3">
                 <div>
                   <label class="block text-xs font-medium text-slate-400 mb-1">Web Username</label>
-                  <input type="text" id="cfg-WEB_USERNAME" placeholder="Leave blank to disable" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+                  <input type="text" id="cfg-WEB_USERNAME" value="admin" placeholder="admin" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
                 </div>
                 <div>
                   <label class="block text-xs font-medium text-slate-400 mb-1">Web Password</label>
-                  <input type="password" id="cfg-WEB_PASSWORD" placeholder="Leave blank to disable" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+                  <input type="password" id="cfg-WEB_PASSWORD" placeholder="Enter password to secure dashboard" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
                 </div>
               </div>
-              <p class="text-[11px] text-slate-500 mt-1">Configuring a username & password requires credentials to access this dashboard.</p>
+              <p class="text-[11px] text-slate-500 mt-2">Default username is <strong class="text-slate-400">admin</strong> with no password set. Enter a password above to secure this web dashboard.</p>
             </div>
           </div>
         </form>
@@ -513,6 +518,19 @@ HTML_CONTENT = """<!DOCTYPE html>
           const input = document.getElementById('cfg-' + k);
           if (input) input.value = v;
         }
+        if (!document.getElementById('cfg-WEB_USERNAME').value) {
+          document.getElementById('cfg-WEB_USERNAME').value = 'admin';
+        }
+        const badge = document.getElementById('auth-status-badge');
+        if (badge) {
+          if (data.WEB_PASSWORD) {
+            badge.className = "px-2 py-0.5 rounded text-[11px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+            badge.textContent = "🔒 Password Protected";
+          } else {
+            badge.className = "px-2 py-0.5 rounded text-[11px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20";
+            badge.textContent = "🔓 No Password (Open Access)";
+          }
+        }
       } catch (e) {
         console.error(e);
       }
@@ -536,7 +554,7 @@ HTML_CONTENT = """<!DOCTYPE html>
         JELLYFIN_API_KEY: document.getElementById('cfg-JELLYFIN_API_KEY').value,
         PLEX_URL: document.getElementById('cfg-PLEX_URL').value,
         PLEX_TOKEN: document.getElementById('cfg-PLEX_TOKEN').value,
-        WEB_USERNAME: document.getElementById('cfg-WEB_USERNAME')?.value || '',
+        WEB_USERNAME: document.getElementById('cfg-WEB_USERNAME')?.value || 'admin',
         WEB_PASSWORD: document.getElementById('cfg-WEB_PASSWORD')?.value || '',
         LOG_LEVEL: document.getElementById('cfg-LOG_LEVEL').value,
       };
@@ -608,7 +626,7 @@ async def cancel_download_endpoint(task_id: str):
 
 @app.websocket("/ws/downloads")
 async def websocket_downloads(websocket: WebSocket):
-    if settings.web_username and settings.web_password:
+    if settings.web_password:
         auth_header = websocket.headers.get("authorization")
         cookie_token = websocket.cookies.get("teldownloader_auth")
         query_token = websocket.query_params.get("auth")
@@ -676,6 +694,12 @@ async def get_config():
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
                     cfg[k.strip()] = v.strip().strip('"').strip("'")
+
+    if not cfg.get("WEB_USERNAME"):
+        cfg["WEB_USERNAME"] = settings.web_username or "admin"
+    if "WEB_PASSWORD" not in cfg:
+        cfg["WEB_PASSWORD"] = settings.web_password or ""
+
     return JSONResponse(cfg)
 
 
@@ -691,7 +715,7 @@ class ConfigPayload(BaseModel):
     JELLYFIN_API_KEY: str = ""
     PLEX_URL: str = ""
     PLEX_TOKEN: str = ""
-    WEB_USERNAME: str = ""
+    WEB_USERNAME: str = "admin"
     WEB_PASSWORD: str = ""
     LOG_LEVEL: str = "INFO"
 
@@ -699,7 +723,7 @@ class ConfigPayload(BaseModel):
 @app.post("/api/config")
 async def save_config(payload: ConfigPayload):
     # Update in-memory settings
-    settings.web_username = payload.WEB_USERNAME
+    settings.web_username = payload.WEB_USERNAME or "admin"
     settings.web_password = payload.WEB_PASSWORD
     settings.log_level = payload.LOG_LEVEL
 
