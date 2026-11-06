@@ -283,20 +283,32 @@ HTML_CONTENT = """<!DOCTYPE html>
             <h3 class="text-sm font-semibold text-blue-400 uppercase tracking-wider">Telegram Credentials</h3>
             <div>
               <label class="block text-xs font-medium text-slate-400 mb-1">Telegram Bot Token</label>
-              <input type="text" id="cfg-BOT_TOKEN" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+              <div class="relative">
+                <input type="password" id="cfg-BOT_TOKEN" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 pr-9 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+                <button type="button" onclick="togglePasswordVisibility('cfg-BOT_TOKEN', this)" title="Toggle visibility" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition text-xs">👁️</button>
+              </div>
             </div>
             <div>
               <label class="block text-xs font-medium text-slate-400 mb-1">Admin Telegram User ID</label>
-              <input type="text" id="cfg-ADMIN_USER_ID" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+              <div class="relative">
+                <input type="password" id="cfg-ADMIN_USER_ID" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 pr-9 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+                <button type="button" onclick="togglePasswordVisibility('cfg-ADMIN_USER_ID', this)" title="Toggle visibility" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition text-xs">👁️</button>
+              </div>
             </div>
             <div class="grid grid-cols-2 gap-3">
               <div>
                 <label class="block text-xs font-medium text-slate-400 mb-1">Telethon API ID</label>
-                <input type="text" id="cfg-API_ID" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+                <div class="relative">
+                  <input type="password" id="cfg-API_ID" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 pr-9 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+                  <button type="button" onclick="togglePasswordVisibility('cfg-API_ID', this)" title="Toggle visibility" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition text-xs">👁️</button>
+                </div>
               </div>
               <div>
                 <label class="block text-xs font-medium text-slate-400 mb-1">Telethon API Hash</label>
-                <input type="text" id="cfg-API_HASH" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+                <div class="relative">
+                  <input type="password" id="cfg-API_HASH" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 pr-9 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+                  <button type="button" onclick="togglePasswordVisibility('cfg-API_HASH', this)" title="Toggle visibility" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition text-xs">👁️</button>
+                </div>
               </div>
             </div>
             <div>
@@ -356,7 +368,10 @@ HTML_CONTENT = """<!DOCTYPE html>
                 </div>
                 <div>
                   <label class="block text-xs font-medium text-slate-400 mb-1">Web Password</label>
-                  <input type="password" id="cfg-WEB_PASSWORD" placeholder="Enter password to secure dashboard" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+                  <div class="relative">
+                    <input type="password" id="cfg-WEB_PASSWORD" placeholder="Enter password to secure dashboard" class="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 pr-9 text-sm text-slate-100 focus:outline-none focus:border-blue-500">
+                    <button type="button" onclick="togglePasswordVisibility('cfg-WEB_PASSWORD', this)" title="Toggle visibility" class="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition text-xs">👁️</button>
+                  </div>
                 </div>
               </div>
               <p class="text-[11px] text-slate-500 mt-2">Default username is <strong class="text-slate-400">admin</strong> with no password set. Enter a password above to secure this web dashboard.</p>
@@ -372,6 +387,20 @@ HTML_CONTENT = """<!DOCTYPE html>
 
   <script>
     let libraryData = [];
+
+    function togglePasswordVisibility(id, btn) {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (el.type === 'password') {
+        el.type = 'text';
+        btn.textContent = '🙈';
+        btn.title = 'Hide value';
+      } else {
+        el.type = 'password';
+        btn.textContent = '👁️';
+        btn.title = 'Show value';
+      }
+    }
 
     function toggleTab(tab) {
       ['downloads', 'library', 'config'].forEach(t => {
