@@ -23,9 +23,6 @@ def get_auth_token() -> str:
 
 
 def is_authenticated(request: Request) -> bool:
-    if not settings.web_password:
-        return True
-
     cookie_token = request.cookies.get("tel_session")
     if cookie_token and secrets.compare_digest(cookie_token, get_auth_token()):
         return True
@@ -39,7 +36,8 @@ def is_authenticated(request: Request) -> bool:
             if ":" in decoded:
                 username, password = decoded.split(":", 1)
                 expected_user = settings.web_username or "admin"
-                return secrets.compare_digest(username, expected_user) and secrets.compare_digest(password, settings.web_password)
+                expected_pass = settings.web_password or ""
+                return secrets.compare_digest(username, expected_user) and secrets.compare_digest(password, expected_pass)
         except Exception:
             pass
 
@@ -54,8 +52,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path in ("/login", "/logout"):
             return await call_next(request)
 
-        # If a password is set and user is not authenticated:
-        if settings.web_password and not is_authenticated(request):
+        # Require session authentication for all pages & APIs
+        if not is_authenticated(request):
             if path.startswith("/api/"):
                 return JSONResponse({"detail": "Unauthorized: Please sign in."}, status_code=401)
             return RedirectResponse(url="/login", status_code=303)
@@ -101,7 +99,8 @@ LOGIN_HTML = """<!DOCTYPE html>
       </div>
       <div>
         <label class="block text-xs font-medium text-slate-300 mb-1.5">Password</label>
-        <input type="password" name="password" placeholder="Leave empty if none" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition">
+        <input type="password" name="password" placeholder="{pwd_placeholder}" class="w-full bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 transition">
+        {helper_note}
       </div>
       <button type="submit" class="w-full py-2.5 px-4 rounded-xl text-sm font-semibold bg-blue-600 hover:bg-blue-500 text-white shadow-lg shadow-blue-500/20 transition duration-150">
         Sign In
@@ -618,10 +617,17 @@ HTML_CONTENT = """<!DOCTYPE html>
 
 @app.api_route("/login", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def login_get(request: Request):
-    if not settings.web_password or is_authenticated(request):
+    if is_authenticated(request):
         return RedirectResponse(url="/", status_code=303)
     username = settings.web_username or "admin"
-    content = LOGIN_HTML.replace("{error_placeholder}", "").replace("{username_val}", username)
+    pwd_hint = "Leave empty if none configured" if not settings.web_password else "••••••••"
+    helper = '<p class="text-[11px] text-slate-400 mt-1">Default setup: leave password empty and click Sign In</p>' if not settings.web_password else ""
+    content = (
+        LOGIN_HTML.replace("{error_placeholder}", "")
+        .replace("{username_val}", username)
+        .replace("{pwd_placeholder}", pwd_hint)
+        .replace("{helper_note}", helper)
+    )
     return HTMLResponse(content=content)
 
 
@@ -641,16 +647,12 @@ async def login_post(request: Request):
         password = parsed.get("password", [""])[0]
 
     expected_user = settings.web_username or "admin"
-    valid = False
-    if not settings.web_password:
-        valid = True
-    elif (
-        secrets.compare_digest(username, expected_user)
-        and secrets.compare_digest(password, settings.web_password)
-    ):
-        valid = True
+    expected_pass = settings.web_password or ""
 
-    if valid:
+    user_valid = secrets.compare_digest(username.strip(), expected_user)
+    pass_valid = secrets.compare_digest(password, expected_pass)
+
+    if user_valid and pass_valid:
         response = RedirectResponse(url="/", status_code=303)
         response.set_cookie(
             key="tel_session",
@@ -667,7 +669,14 @@ async def login_post(request: Request):
       <span class="text-rose-400">⚠️</span> Invalid username or password.
     </div>
     """
-    content = LOGIN_HTML.replace("{error_placeholder}", error_html).replace("{username_val}", username or expected_user)
+    pwd_hint = "Leave empty if none configured" if not settings.web_password else "••••••••"
+    helper = '<p class="text-[11px] text-slate-400 mt-1">Default setup: leave password empty and click Sign In</p>' if not settings.web_password else ""
+    content = (
+        LOGIN_HTML.replace("{error_placeholder}", error_html)
+        .replace("{username_val}", username or expected_user)
+        .replace("{pwd_placeholder}", pwd_hint)
+        .replace("{helper_note}", helper)
+    )
     return HTMLResponse(content=content, status_code=401)
 
 
@@ -699,15 +708,14 @@ async def cancel_download_endpoint(task_id: str):
 
 @app.websocket("/ws/downloads")
 async def websocket_downloads(websocket: WebSocket):
-    if settings.web_password:
-        cookie_token = websocket.cookies.get("tel_session")
-        query_token = websocket.query_params.get("auth")
-        valid = (cookie_token and secrets.compare_digest(cookie_token, get_auth_token())) or (
-            query_token and secrets.compare_digest(query_token, get_auth_token())
-        )
-        if not valid:
-            await websocket.close(code=1008)
-            return
+    cookie_token = websocket.cookies.get("tel_session")
+    query_token = websocket.query_params.get("auth")
+    valid = (cookie_token and secrets.compare_digest(cookie_token, get_auth_token())) or (
+        query_token and secrets.compare_digest(query_token, get_auth_token())
+    )
+    if not valid:
+        await websocket.close(code=1008)
+        return
 
     await websocket.accept()
     # Send immediate state
@@ -829,16 +837,12 @@ async def save_config(payload: ConfigPayload):
         f.writelines(new_lines)
 
     response = JSONResponse({"status": "saved"})
-    if settings.web_password:
-        response.set_cookie(
-            key="tel_session",
-            value=get_auth_token(),
-            httponly=True,
-            samesite="lax",
-            path="/",
-            max_age=86400 * 30,
-        )
-    else:
-        response.delete_cookie("tel_session", path="/")
-
+    response.set_cookie(
+        key="tel_session",
+        value=get_auth_token(),
+        httponly=True,
+        samesite="lax",
+        path="/",
+        max_age=86400 * 30,
+    )
     return response
