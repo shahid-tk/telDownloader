@@ -45,7 +45,17 @@ async def help_command(update, context):
     from utils.auth import guard_admin
     if not await guard_admin(update, context):
         return
-    await update.effective_message.reply_text("/start\n/status\n/cancel\n/stop\n/help")
+    await update.effective_message.reply_text(
+        "Available commands:\n"
+        "/start - Choose mode (Movies/Shows)\n"
+        "/status - View download progress\n"
+        "/cancel - Cancel current download\n"
+        "/stop - Complete season upload\n"
+        "/delete - Manage library files\n"
+        "/resetweb - Reset web dashboard password to default (empty)\n"
+        "/webpass <pwd> - Set a new web dashboard password\n"
+        "/help - Show this message"
+    )
 
 
 async def stop_command(update, context):
@@ -190,6 +200,7 @@ def build_application() -> Application:
 
     from handlers.delete import delete_command
     from handlers.delete_callbacks import delete_callbacks
+    from handlers.auth_cmd import reset_web_command
 
     app.add_handler(CommandHandler("start", start_command, block=False))
     app.add_handler(CommandHandler("help", help_command, block=False))
@@ -197,6 +208,9 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("cancel", cancel_command, block=False))
     app.add_handler(CommandHandler("stop", stop_command, block=False))
     app.add_handler(CommandHandler("delete", delete_command, block=False))
+    app.add_handler(CommandHandler("resetweb", reset_web_command, block=False))
+    app.add_handler(CommandHandler("webpass", reset_web_command, block=False))
+    app.add_handler(CommandHandler("webpassword", reset_web_command, block=False))
 
     app.add_handler(CallbackQueryHandler(menu_callbacks, pattern="^(mode_movie|mode_show)$", block=False))
     app.add_handler(CallbackQueryHandler(show_callbacks, pattern="^(show_new|show_cont\\||show_sel\\||show_season\\||show_season_new\\|)", block=False))
