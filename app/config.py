@@ -13,8 +13,8 @@ class Settings(BaseSettings):
 
     sqlite_path: str = "/app/data/media_data.db"
 
-    movies_dir: str = "/media/jellyfinData/movies"
-    shows_dir: str = "/media/jellyfinData/shows"
+    movies_dir: str = "/media/movies"
+    shows_dir: str = "/media/shows"
 
     # Optional Media Servers
     jellyfin_url: str = ""

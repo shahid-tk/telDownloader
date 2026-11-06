@@ -8,7 +8,7 @@ services:
     ports:
       - "${WEB_PORT:-8088}:8088"
     networks:
-      - hit_net
+      - media_net
     environment:
       BOT_TOKEN: ${BOT_TOKEN}
       ADMIN_USER_ID: ${ADMIN_USER_ID}
@@ -16,8 +16,8 @@ services:
       API_HASH: ${API_HASH}
       SESSION_FILE: /app/data/telethon.session
       SQLITE_PATH: /app/data/media_data.db
-      MOVIES_DIR: ${MOVIES_DIR:-/media/jellyfinData/movies}
-      SHOWS_DIR: ${SHOWS_DIR:-/media/jellyfinData/shows}
+      MOVIES_DIR: ${MOVIES_DIR:-/media/movies}
+      SHOWS_DIR: ${SHOWS_DIR:-/media/shows}
       TELETHON_SOURCE_CHAT: ${TELETHON_SOURCE_CHAT:-}
       JELLYFIN_URL: ${JELLYFIN_URL:-}
       JELLYFIN_API_KEY: ${JELLYFIN_API_KEY:-}
@@ -28,12 +28,13 @@ services:
       WEB_PASSWORD: ${WEB_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     volumes:
-      - ${MOVIES_DIR:-/media/jellyfinData/movies}:${MOVIES_DIR:-/media/jellyfinData/movies}
-      - ${SHOWS_DIR:-/media/jellyfinData/shows}:${SHOWS_DIR:-/media/jellyfinData/shows}
+      - ${MOVIES_DIR:-/media/movies}:${MOVIES_DIR:-/media/movies}
+      - ${SHOWS_DIR:-/media/shows}:${SHOWS_DIR:-/media/shows}
       - ./data:/app/data
       - ./logs:/app/logs
       - ./.env:/app/.env
 
 networks:
-  hit_net:
-    external: true
+  media_net:
+    name: ${DOCKER_NETWORK:-teldownloader_net}
+    external: ${DOCKER_NETWORK_EXTERNAL:-false}
